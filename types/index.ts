@@ -37,6 +37,8 @@ export interface User {
   isAdmin?: boolean; // 관리자 여부
   bdsmPreference?: BDSMPreference; // BDSM 성향
   bio?: string; // 자기소개
+  deletionRequestedAt?: number; // 탈퇴 요청일 (타임스탬프)
+  deletionScheduledAt?: number; // 탈퇴 예정일 (타임스탬프, 요청일 + 30일)
 }
 
 export interface Message {

@@ -10,7 +10,7 @@ type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 export default function MoreScreen() {
   const navigation = useNavigation<NavigationProp>();
-  const { currentUser, points } = useChat();
+  const { currentUser, points, requestAccountDeletion, cancelAccountDeletion } = useChat();
 
   const handleLogout = async () => {
     Alert.alert(
@@ -38,6 +38,76 @@ export default function MoreScreen() {
         },
       ]
     );
+  };
+
+  const handleDeleteAccount = () => {
+    const isDeletionRequested = currentUser.deletionRequestedAt !== undefined;
+    
+    if (isDeletionRequested) {
+      // 탈퇴 취소
+      const deletionScheduledAt = currentUser.deletionScheduledAt || (currentUser.deletionRequestedAt + 30 * 24 * 60 * 60 * 1000);
+      const daysRemaining = Math.ceil((deletionScheduledAt - Date.now()) / (24 * 60 * 60 * 1000));
+      
+      Alert.alert(
+        '회원탈퇴 취소',
+        `회원탈퇴가 예정되어 있습니다. (${daysRemaining}일 후 삭제 예정)\n\n탈퇴를 취소하시겠습니까?`,
+        [
+          {
+            text: '취소',
+            style: 'cancel',
+          },
+          {
+            text: '탈퇴 취소',
+            onPress: async () => {
+              try {
+                await cancelAccountDeletion();
+              } catch (error: any) {
+                console.error('탈퇴 취소 실패:', error);
+              }
+            },
+          },
+        ]
+      );
+    } else {
+      // 탈퇴 요청
+      Alert.alert(
+        '회원탈퇴',
+        '정말 회원탈퇴를 하시겠습니까?\n\n탈퇴 후 30일 동안 계정이 보관되며, 30일 이내에 다시 로그인하시면 탈퇴가 취소됩니다.\n30일 후 계정이 완전히 삭제됩니다.',
+        [
+          {
+            text: '취소',
+            style: 'cancel',
+          },
+          {
+            text: '탈퇴하기',
+            style: 'destructive',
+            onPress: () => {
+              Alert.alert(
+                '최종 확인',
+                '회원탈퇴를 진행하시겠습니까?',
+                [
+                  {
+                    text: '취소',
+                    style: 'cancel',
+                  },
+                  {
+                    text: '확인',
+                    style: 'destructive',
+                    onPress: async () => {
+                      try {
+                        await requestAccountDeletion();
+                      } catch (error: any) {
+                        console.error('탈퇴 요청 실패:', error);
+                      }
+                    },
+                  },
+                ]
+              );
+            },
+          },
+        ]
+      );
+    }
   };
 
   return (
@@ -88,6 +158,14 @@ export default function MoreScreen() {
           </TouchableOpacity>
         </View>
         <View style={styles.section}>
+          <TouchableOpacity 
+            style={styles.menuItem}
+            onPress={handleDeleteAccount}
+          >
+            <Text style={[styles.menuText, styles.deleteText]}>
+              {currentUser.deletionRequestedAt ? '회원탈퇴 취소' : '회원탈퇴'}
+            </Text>
+          </TouchableOpacity>
           <TouchableOpacity 
             style={styles.menuItem}
             onPress={handleLogout}
@@ -156,6 +234,10 @@ const styles = StyleSheet.create({
     color: '#888',
   },
   logoutText: {
+    color: '#F04438',
+    fontWeight: '600',
+  },
+  deleteText: {
     color: '#F04438',
     fontWeight: '600',
   },

@@ -54,6 +54,8 @@ class FirebaseFirestoreService {
     points?: number;
     bdsmPreference?: 'dominant' | 'submissive' | 'switch' | 'none';
     bio?: string;
+    deletionRequestedAt?: number;
+    deletionScheduledAt?: number;
   }): Promise<void> {
     try {
       const userRef = doc(db, this.COLLECTIONS.USERS, userData.id);
@@ -97,6 +99,12 @@ class FirebaseFirestoreService {
       if (userData.bio !== undefined) {
         cleanedData.bio = userData.bio;
       }
+      if (userData.deletionRequestedAt !== undefined) {
+        cleanedData.deletionRequestedAt = Timestamp.fromMillis(userData.deletionRequestedAt);
+      }
+      if (userData.deletionScheduledAt !== undefined) {
+        cleanedData.deletionScheduledAt = Timestamp.fromMillis(userData.deletionScheduledAt);
+      }
       
       await setDoc(userRef, cleanedData, { merge: true });
     } catch (error) {
@@ -132,6 +140,8 @@ class FirebaseFirestoreService {
         points: data.points || 0, // 포인트 정보 포함
         bdsmPreference: data.bdsmPreference,
         bio: data.bio,
+        deletionRequestedAt: data.deletionRequestedAt?.toMillis(),
+        deletionScheduledAt: data.deletionScheduledAt?.toMillis(),
       };
     } catch (error) {
       console.error('사용자 조회 오류:', error);
@@ -170,6 +180,8 @@ class FirebaseFirestoreService {
           isAdmin: data.isAdmin || false,
           bdsmPreference: data.bdsmPreference,
           bio: data.bio,
+          deletionRequestedAt: data.deletionRequestedAt?.toMillis(),
+          deletionScheduledAt: data.deletionScheduledAt?.toMillis(),
         };
         const points = data.points !== undefined ? data.points : 1000; // 기본값 1000
         console.log('사용자 정보 실시간 업데이트:', user.id, user.name, user.location, '지역:', user.region, '포인트:', points);
@@ -195,11 +207,20 @@ class FirebaseFirestoreService {
       
       const users = querySnapshot.docs
         .filter((doc) => {
+          const data = doc.data();
           const shouldExclude = excludeUserId && doc.id === excludeUserId;
+          // 탈퇴 예정 사용자 제외
+          const isDeletionScheduled = data.deletionScheduledAt && data.deletionScheduledAt.toMillis() <= Date.now();
+          const isDeletionRequested = data.deletionRequestedAt; // 탈퇴 요청된 사용자도 제외
+          
           if (shouldExclude) {
             console.log('사용자 제외:', doc.id);
           }
-          return !shouldExclude;
+          if (isDeletionRequested) {
+            console.log('탈퇴 예정 사용자 제외:', doc.id);
+          }
+          
+          return !shouldExclude && !isDeletionRequested && !isDeletionScheduled;
         })
         .map((doc) => {
           const data = doc.data();
@@ -216,6 +237,8 @@ class FirebaseFirestoreService {
             isAdmin: data.isAdmin || false,
             bdsmPreference: data.bdsmPreference,
             bio: data.bio,
+            deletionRequestedAt: data.deletionRequestedAt?.toMillis(),
+            deletionScheduledAt: data.deletionScheduledAt?.toMillis(),
           };
           console.log('사용자 매핑:', user.id, user.name);
           return user;
@@ -245,8 +268,13 @@ class FirebaseFirestoreService {
       (snapshot: QuerySnapshot<DocumentData>) => {
         const users: User[] = snapshot.docs
           .filter((doc) => {
+            const data = doc.data();
             const shouldExclude = excludeUserId && doc.id === excludeUserId;
-            return !shouldExclude;
+            // 탈퇴 예정 사용자 제외
+            const isDeletionScheduled = data.deletionScheduledAt && data.deletionScheduledAt.toMillis() <= Date.now();
+            const isDeletionRequested = data.deletionRequestedAt; // 탈퇴 요청된 사용자도 제외
+            
+            return !shouldExclude && !isDeletionRequested && !isDeletionScheduled;
           })
           .map((doc) => {
             const data = doc.data();
@@ -263,6 +291,8 @@ class FirebaseFirestoreService {
               isAdmin: data.isAdmin || false,
               bdsmPreference: data.bdsmPreference,
               bio: data.bio,
+              deletionRequestedAt: data.deletionRequestedAt?.toMillis(),
+              deletionScheduledAt: data.deletionScheduledAt?.toMillis(),
             };
           });
         console.log('사용자 목록 실시간 업데이트:', users.length, '명');
@@ -995,6 +1025,49 @@ class FirebaseFirestoreService {
     } catch (error) {
       console.error('구매 이력 조회 오류:', error);
       return null;
+    }
+  }
+
+  /**
+   * 회원탈퇴 요청 (30일 후 삭제 예정)
+   */
+  async requestAccountDeletion(userId: string): Promise<void> {
+    try {
+      const now = Date.now();
+      const deletionScheduledAt = now + 30 * 24 * 60 * 60 * 1000; // 30일 후
+      
+      const userRef = doc(db, this.COLLECTIONS.USERS, userId);
+      await updateDoc(userRef, {
+        deletionRequestedAt: Timestamp.fromMillis(now),
+        deletionScheduledAt: Timestamp.fromMillis(deletionScheduledAt),
+      });
+      
+      console.log('회원탈퇴 요청 완료:', {
+        userId,
+        requestedAt: new Date(now).toISOString(),
+        scheduledAt: new Date(deletionScheduledAt).toISOString(),
+      });
+    } catch (error) {
+      console.error('회원탈퇴 요청 오류:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 회원탈퇴 취소
+   */
+  async cancelAccountDeletion(userId: string): Promise<void> {
+    try {
+      const userRef = doc(db, this.COLLECTIONS.USERS, userId);
+      await updateDoc(userRef, {
+        deletionRequestedAt: null,
+        deletionScheduledAt: null,
+      });
+      
+      console.log('회원탈퇴 취소 완료:', userId);
+    } catch (error) {
+      console.error('회원탈퇴 취소 오류:', error);
+      throw error;
     }
   }
 

@@ -3,6 +3,7 @@ import { Alert } from 'react-native';
 import { ChatRoom, Message, User, Post, Gender, Location, ReportReason, Report, BDSMPreference, Region } from '../types';
 import { firebaseFirestoreService } from '../services/FirebaseFirestoreService';
 import { firebaseStorageService } from '../services/FirebaseStorageService';
+import { firebaseAuthService } from '../services/FirebaseAuthService';
 import { auth } from '../config/firebase';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import { getLocationFromRegion, REGION_COORDINATES } from '../utils/regions';
@@ -37,6 +38,8 @@ interface ChatContextType {
   deletePost: (postId: string) => void; // 관리자용: 게시글 삭제
   deleteUser: (userId: string) => void; // 관리자용: 사용자 삭제
   updateReportStatus: (reportId: string, status: 'pending' | 'resolved' | 'rejected') => void; // 관리자용: 신고 상태 업데이트
+  requestAccountDeletion: () => Promise<void>; // 회원탈퇴 요청
+  cancelAccountDeletion: () => Promise<void>; // 회원탈퇴 취소
 }
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
@@ -240,6 +243,26 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
               })();
             }
             
+            // 탈퇴 예정 사용자 체크
+            if (userData.deletionRequestedAt) {
+              const deletionScheduledAt = userData.deletionScheduledAt || userData.deletionRequestedAt + 30 * 24 * 60 * 60 * 1000;
+              const daysRemaining = Math.ceil((deletionScheduledAt - Date.now()) / (24 * 60 * 60 * 1000));
+              
+              if (daysRemaining <= 0) {
+                // 탈퇴 예정일이 지났으면 자동 로그아웃
+                console.log('탈퇴 예정일이 지나서 자동 로그아웃');
+                firebaseAuthService.signOut();
+                Alert.alert('알림', '회원탈퇴가 완료되었습니다.');
+                return;
+              } else {
+                // 탈퇴 예정일이 지나지 않았으면 자동으로 탈퇴 취소 (재로그인 시)
+                console.log('탈퇴 예정 사용자 재로그인 - 탈퇴 자동 취소');
+                firebaseFirestoreService.cancelAccountDeletion(userData.id).catch((error) => {
+                  console.error('탈퇴 취소 실패:', error);
+                });
+              }
+            }
+            
             // 사용자 정보 업데이트
             setCurrentUser({
               id: userData.id,
@@ -252,6 +275,8 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
               isAdmin: userData.isAdmin || false,
               bdsmPreference: userData.bdsmPreference,
               bio: userData.bio,
+              deletionRequestedAt: userData.deletionRequestedAt,
+              deletionScheduledAt: userData.deletionScheduledAt,
             });
             
             // 포인트 정보도 Firestore에서 가져온 값으로 업데이트
@@ -1050,6 +1075,40 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     );
   }, []);
 
+  // 회원탈퇴 요청 (30일 후 삭제 예정)
+  const requestAccountDeletion = useCallback(async () => {
+    try {
+      await firebaseFirestoreService.requestAccountDeletion(currentUser.id);
+      Alert.alert(
+        '회원탈퇴 요청 완료',
+        '회원탈퇴가 요청되었습니다. 30일 후 계정이 완전히 삭제됩니다.\n\n탈퇴를 취소하려면 30일 이내에 앱에 다시 로그인하시면 됩니다.',
+        [
+          {
+            text: '확인',
+            onPress: async () => {
+              // 탈퇴 요청 후 로그아웃
+              await firebaseAuthService.signOut();
+            },
+          },
+        ]
+      );
+    } catch (error: any) {
+      console.error('회원탈퇴 요청 실패:', error);
+      Alert.alert('오류', error.message || '회원탈퇴 요청에 실패했습니다.');
+    }
+  }, [currentUser.id]);
+
+  // 회원탈퇴 취소
+  const cancelAccountDeletion = useCallback(async () => {
+    try {
+      await firebaseFirestoreService.cancelAccountDeletion(currentUser.id);
+      Alert.alert('회원탈퇴 취소', '회원탈퇴가 취소되었습니다.');
+    } catch (error: any) {
+      console.error('회원탈퇴 취소 실패:', error);
+      Alert.alert('오류', error.message || '회원탈퇴 취소에 실패했습니다.');
+    }
+  }, [currentUser.id]);
+
   const value: ChatContextType = useMemo(
     () => ({
       currentUser,
@@ -1081,8 +1140,10 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       deletePost,
       deleteUser,
       updateReportStatus,
+      requestAccountDeletion,
+      cancelAccountDeletion,
     }),
-    [currentUser, contacts, chatRooms, messages, points, posts, blockedUsers, reports, createOrOpenChat, sendMessage, getMessages, getChatPartner, markAsRead, createPost, startChatFromPost, deductPoints, addPoints, updateProfile, updateRegion, getDistance, formatDistance, blockUser, unblockUser, isBlocked, reportPost, reportUser, deletePost, deleteUser, updateReportStatus]
+    [currentUser, contacts, chatRooms, messages, points, posts, blockedUsers, reports, createOrOpenChat, sendMessage, getMessages, getChatPartner, markAsRead, createPost, startChatFromPost, deductPoints, addPoints, updateProfile, updateRegion, getDistance, formatDistance, blockUser, unblockUser, isBlocked, reportPost, reportUser, deletePost, deleteUser, updateReportStatus, requestAccountDeletion, cancelAccountDeletion]
   );
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;
