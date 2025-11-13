@@ -1,6 +1,6 @@
-import React from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, AppState } from 'react-native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useChat } from '../context/ChatContext';
 import { RootStackParamList } from '../navigation/types';
@@ -10,7 +10,30 @@ type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 export default function MoreScreen() {
   const navigation = useNavigation<NavigationProp>();
-  const { currentUser, points, requestAccountDeletion, cancelAccountDeletion } = useChat();
+  const { currentUser, points, requestAccountDeletion, cancelAccountDeletion, checkAttendance, canCheckAttendance, blockedUsers } = useChat();
+  const [, setRefreshKey] = useState(0);
+
+  // 화면에 포커스가 올 때마다 날짜 확인 (00시 지났는지 체크)
+  useFocusEffect(
+    React.useCallback(() => {
+      // 화면이 포커스될 때마다 날짜 확인을 위해 리렌더링 트리거
+      setRefreshKey(prev => prev + 1);
+    }, [])
+  );
+
+  // 앱이 포그라운드로 돌아올 때 날짜 확인
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', nextAppState => {
+      if (nextAppState === 'active') {
+        // 앱이 활성화될 때 날짜 확인을 위해 리렌더링 트리거
+        setRefreshKey(prev => prev + 1);
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, []);
 
   const handleLogout = async () => {
     Alert.alert(
@@ -117,7 +140,23 @@ export default function MoreScreen() {
         <Text style={styles.subtitle}>안녕하세요, {currentUser.name}님</Text>
       </View>
       <ScrollView style={styles.content}>
-        <View style={styles.section}>
+        <View style={[styles.section, styles.firstSection]}>
+          {canCheckAttendance() && (
+            <TouchableOpacity
+              style={[styles.menuItem, styles.attendanceItem]}
+              onPress={async () => {
+                await checkAttendance();
+              }}
+            >
+              <View style={styles.attendanceContent}>
+                <Text style={[styles.menuText, styles.attendanceText]}>출석체크</Text>
+                <Text style={styles.attendanceSubtext}>50포인트 받기</Text>
+              </View>
+              <View style={styles.attendanceButton}>
+                <Text style={styles.attendanceButtonText}>체크</Text>
+              </View>
+            </TouchableOpacity>
+          )}
           <TouchableOpacity
             style={styles.menuItem}
             onPress={() => navigation.navigate('ProfileSettings')}
@@ -130,6 +169,13 @@ export default function MoreScreen() {
             onPress={() => navigation.navigate('Charge')}
           >
             <Text style={styles.menuText}>포인트 충전</Text>
+            <Text style={styles.menuArrow}>›</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => navigation.navigate('BlockedUsers')}
+          >
+            <Text style={styles.menuText}>차단한 회원</Text>
             <Text style={styles.menuArrow}>›</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.menuItem}>
@@ -211,6 +257,9 @@ const styles = StyleSheet.create({
     borderRadius: 0,
     overflow: 'hidden',
   },
+  firstSection: {
+    marginTop: 0,
+  },
   menuItem: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -239,6 +288,58 @@ const styles = StyleSheet.create({
   },
   deleteText: {
     color: '#F04438',
+    fontWeight: '600',
+  },
+  attendanceItem: {
+    backgroundColor: '#F0F4FF',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E5E7EB',
+  },
+  attendanceContent: {
+    flex: 1,
+  },
+  attendanceText: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: '#4C6EF5',
+    marginBottom: 4,
+  },
+  attendanceSubtext: {
+    fontSize: 13,
+    color: '#667085',
+  },
+  attendanceButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#4C6EF5',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  attendanceButtonDisabled: {
+    backgroundColor: '#E5E7EB',
+  },
+  attendanceButtonText: {
+    fontSize: 20,
+    color: '#fff',
+    fontWeight: 'bold',
+  },
+  attendanceButtonTextDisabled: {
+    color: '#9CA3AF',
+  },
+  badge: {
+    backgroundColor: '#F04438',
+    borderRadius: 10,
+    minWidth: 20,
+    height: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    marginRight: 8,
+  },
+  badgeText: {
+    color: '#fff',
+    fontSize: 12,
     fontWeight: '600',
   },
 });

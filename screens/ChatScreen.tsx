@@ -9,6 +9,8 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  Pressable,
+  Image,
 } from 'react-native';
 import { RouteProp, useRoute, useNavigation } from '@react-navigation/native';
 import { RootStackParamList } from '../navigation/types';
@@ -26,14 +28,26 @@ const formatTime = (timestamp: number): string => {
   });
 };
 
+// 아바타 색상 생성 함수
+const getAvatarColor = (id: string) => {
+  const colors = ['#4C6EF5', '#FF6B6B', '#4ECDC4', '#A29BFE', '#FFD93D', '#6C5CE7'];
+  return colors[id.length % colors.length];
+};
+
+// 이니셜 가져오기 함수
+const getInitial = (name: string) => {
+  return name.charAt(0).toUpperCase() || '?';
+};
+
 export default function ChatScreen() {
   const { params } = useRoute<ChatRouteProp>();
   const navigation = useNavigation();
   const { chatRoomId, partner } = params;
-  const { getMessages, sendMessage, markAsRead, currentUser, blockUser, reportUser, isBlocked } = useChat();
+  const { getMessages, sendMessage, markAsRead, currentUser, blockUser, reportUser, isBlocked, contacts } = useChat();
   const [text, setText] = useState('');
   const flatListRef = useRef<FlatList<Message>>(null);
   const [firestoreMessages, setFirestoreMessages] = useState<Message[]>([]);
+  const unsubscribeMessagesRef = useRef<(() => void) | null>(null);
 
   // Firestore에서 메시지 실시간 구독
   useEffect(() => {
@@ -48,9 +62,13 @@ export default function ChatScreen() {
       100 // 최대 100개 메시지
     );
 
+    // 구독 해제 함수를 ref에 저장
+    unsubscribeMessagesRef.current = unsubscribe;
+
     return () => {
       console.log('메시지 구독 해제:', chatRoomId);
       unsubscribe();
+      unsubscribeMessagesRef.current = null;
     };
   }, [chatRoomId]);
 
@@ -81,19 +99,63 @@ export default function ChatScreen() {
     setText('');
   }, [text, chatRoomId, sendMessage]);
 
+  // contacts를 Map으로 변환하여 빠른 조회
+  const contactsMap = useMemo(() => {
+    const map = new Map<string, typeof partner>();
+    contacts.forEach((contact) => map.set(contact.id, contact));
+    // partner도 추가 (혹시 contacts에 없을 수 있음)
+    map.set(partner.id, partner);
+    // currentUser도 추가
+    map.set(currentUser.id, currentUser);
+    return map;
+  }, [contacts, partner, currentUser]);
+
   const renderMessage = useCallback(({ item }: { item: Message }) => {
     const isMe = item.senderId === currentUser.id;
+    const sender = contactsMap.get(item.senderId) || (isMe ? currentUser : partner);
+    const senderName = sender?.name || '알 수 없음';
+    const senderAvatar = sender?.avatar;
+    const avatarColor = getAvatarColor(item.senderId);
+    const initial = getInitial(senderName);
+
     return (
       <View style={[styles.messageRow, isMe ? styles.myRow : styles.partnerRow]}>
-        <View style={[styles.messageBubble, isMe ? styles.myBubble : styles.partnerBubble]}>
-          <Text style={[styles.messageText, isMe ? styles.myText : styles.partnerText]}>{item.text}</Text>
-          <Text style={[styles.timestamp, isMe ? styles.myTimestamp : styles.partnerTimestamp]}>
-            {formatTime(item.timestamp)}
-          </Text>
+        {!isMe && (
+          <View style={styles.avatarContainer}>
+            <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
+              {senderAvatar ? (
+                <Image source={{ uri: senderAvatar }} style={styles.avatarImage} />
+              ) : (
+                <Text style={styles.avatarText}>{initial}</Text>
+              )}
+            </View>
+          </View>
+        )}
+        <View style={styles.messageContent}>
+          {!isMe && (
+            <Text style={styles.senderName}>{senderName}</Text>
+          )}
+          <View style={[styles.messageBubble, isMe ? styles.myBubble : styles.partnerBubble]}>
+            <Text style={[styles.messageText, isMe ? styles.myText : styles.partnerText]}>{item.text}</Text>
+            <Text style={[styles.timestamp, isMe ? styles.myTimestamp : styles.partnerTimestamp]}>
+              {formatTime(item.timestamp)}
+            </Text>
+          </View>
         </View>
+        {isMe && (
+          <View style={styles.avatarContainer}>
+            <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
+              {senderAvatar ? (
+                <Image source={{ uri: senderAvatar }} style={styles.avatarImage} />
+              ) : (
+                <Text style={styles.avatarText}>{initial}</Text>
+              )}
+            </View>
+          </View>
+        )}
       </View>
     );
-  }, [currentUser.id]);
+  }, [currentUser, contactsMap, partner]);
 
   const keyExtractor = useCallback((item: Message) => item.id, []);
 
@@ -148,10 +210,52 @@ export default function ChatScreen() {
     );
   }, [partner, blockUser, navigation]);
 
+  const handleDeleteChat = useCallback(() => {
+    Alert.alert(
+      '채팅 삭제',
+      '이 채팅방을 삭제하시겠습니까? 삭제된 채팅은 복구할 수 없습니다.',
+      [
+        {
+          text: '취소',
+          style: 'cancel',
+        },
+        {
+          text: '삭제',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              // 먼저 메시지 구독 해제 (권한 오류 방지)
+              if (unsubscribeMessagesRef.current) {
+                console.log('채팅방 삭제 전 메시지 구독 해제');
+                unsubscribeMessagesRef.current();
+                unsubscribeMessagesRef.current = null;
+              }
+              
+              // Firestore에서 채팅방 삭제
+              await firebaseFirestoreService.deleteChatRoom(chatRoomId);
+              Alert.alert('삭제 완료', '채팅방이 삭제되었습니다.', [
+                {
+                  text: '확인',
+                  onPress: () => {
+                    navigation.goBack();
+                  },
+                },
+              ]);
+            } catch (error) {
+              console.error('채팅방 삭제 실패:', error);
+              Alert.alert('오류', '채팅방 삭제에 실패했습니다.');
+            }
+          },
+        },
+      ]
+    );
+  }, [chatRoomId, navigation]);
+
   const handleMenuPress = useCallback(() => {
     const menuOptions = [
       { text: '신고하기', onPress: handleReportUser },
       { text: '차단하기', onPress: handleBlockUser, style: 'destructive' as const },
+      { text: '채팅 삭제', onPress: handleDeleteChat, style: 'destructive' as const },
       { text: '취소', style: 'cancel' as const },
     ];
 
@@ -161,25 +265,40 @@ export default function ChatScreen() {
       menuOptions,
       { cancelable: true }
     );
-  }, [partner, handleReportUser, handleBlockUser]);
+  }, [partner, handleReportUser, handleBlockUser, handleDeleteChat]);
+
 
   // 차단된 사용자인지 확인
   const isUserBlocked = useMemo(() => isBlocked(partner.id), [partner.id, isBlocked]);
 
   useEffect(() => {
-    // 헤더에 메뉴 버튼 추가
+    // 헤더에 메뉴 버튼 추가 - headerTitle은 기본 텍스트로 유지하고 headerRight에 배치
     navigation.setOptions({
+      headerTitle: partner.name, // 기본 텍스트로 설정하여 중앙 정렬 유지
+      headerTitleAlign: 'center' as const,
       headerRight: () => (
-        <TouchableOpacity
-          onPress={handleMenuPress}
-          style={{ marginRight: 12, padding: 4 }}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-        >
-          <Text style={{ fontSize: 18, color: '#4C6EF5' }}>⋯</Text>
-        </TouchableOpacity>
+        <View style={{ backgroundColor: 'transparent' }}>
+          <Pressable
+            onPress={handleMenuPress}
+            style={({ pressed }) => [
+              {
+                padding: 8,
+                opacity: pressed ? 0.7 : 1,
+              }
+            ]}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <Text style={{ fontSize: 20, color: '#4C6EF5', fontWeight: '600' }}>⋯</Text>
+          </Pressable>
+        </View>
       ),
+      headerRightContainerStyle: {
+        backgroundColor: 'transparent',
+        paddingRight: 0,
+        marginRight: 0,
+      },
     });
-  }, [navigation, handleMenuPress]);
+  }, [navigation, partner, handleMenuPress]);
 
   // 차단된 사용자면 채팅방에서 나가기
   useEffect(() => {
@@ -221,7 +340,7 @@ export default function ChatScreen() {
           style={styles.input}
           value={text}
           onChangeText={setText}
-          placeholder="메시지를 입력하세요"
+          placeholder="메시지 입력..."
         />
         <TouchableOpacity
           style={[styles.sendButton, !text.trim() && styles.disabledSendButton]}
@@ -248,6 +367,7 @@ const styles = StyleSheet.create({
   messageRow: {
     flexDirection: 'row',
     marginBottom: 12,
+    alignItems: 'flex-end',
   },
   myRow: {
     justifyContent: 'flex-end',
@@ -255,8 +375,39 @@ const styles = StyleSheet.create({
   partnerRow: {
     justifyContent: 'flex-start',
   },
+  avatarContainer: {
+    marginHorizontal: 8,
+  },
+  avatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarImage: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+  },
+  avatarText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#fff',
+  },
+  messageContent: {
+    maxWidth: '70%',
+    flexDirection: 'column',
+  },
+  senderName: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#667085',
+    marginBottom: 4,
+    marginLeft: 4,
+  },
   messageBubble: {
-    maxWidth: '78%',
+    maxWidth: '100%',
     borderRadius: 20,
     paddingHorizontal: 16,
     paddingVertical: 10,

@@ -56,6 +56,8 @@ class FirebaseFirestoreService {
     bio?: string;
     deletionRequestedAt?: number;
     deletionScheduledAt?: number;
+    lastAttendanceDate?: string;
+    blockedUsers?: Record<string, number>; // 차단된 사용자 목록 (userId -> blockedAt timestamp)
   }): Promise<void> {
     try {
       const userRef = doc(db, this.COLLECTIONS.USERS, userData.id);
@@ -105,6 +107,12 @@ class FirebaseFirestoreService {
       if (userData.deletionScheduledAt !== undefined) {
         cleanedData.deletionScheduledAt = Timestamp.fromMillis(userData.deletionScheduledAt);
       }
+      if (userData.lastAttendanceDate !== undefined) {
+        cleanedData.lastAttendanceDate = userData.lastAttendanceDate;
+      }
+      if (userData.blockedUsers !== undefined) {
+        cleanedData.blockedUsers = userData.blockedUsers;
+      }
       
       await setDoc(userRef, cleanedData, { merge: true });
     } catch (error) {
@@ -142,6 +150,7 @@ class FirebaseFirestoreService {
         bio: data.bio,
         deletionRequestedAt: data.deletionRequestedAt?.toMillis(),
         deletionScheduledAt: data.deletionScheduledAt?.toMillis(),
+        lastAttendanceDate: data.lastAttendanceDate,
       };
     } catch (error) {
       console.error('사용자 조회 오류:', error);
@@ -154,7 +163,7 @@ class FirebaseFirestoreService {
    */
   subscribeToUser(
     userId: string,
-    callback: (user: User | null, points?: number) => void
+    callback: (user: User | null, points?: number, blockedUsers?: Record<string, number>) => void
   ): () => void {
     const userRef = doc(db, this.COLLECTIONS.USERS, userId);
 
@@ -182,10 +191,12 @@ class FirebaseFirestoreService {
           bio: data.bio,
           deletionRequestedAt: data.deletionRequestedAt?.toMillis(),
           deletionScheduledAt: data.deletionScheduledAt?.toMillis(),
+          lastAttendanceDate: data.lastAttendanceDate,
         };
         const points = data.points !== undefined ? data.points : 1000; // 기본값 1000
-        console.log('사용자 정보 실시간 업데이트:', user.id, user.name, user.location, '지역:', user.region, '포인트:', points);
-        callback(user, points);
+        const blockedUsers = data.blockedUsers || {}; // 차단된 사용자 목록
+        console.log('사용자 정보 실시간 업데이트:', user.id, user.name, user.location, '지역:', user.region, '포인트:', points, '차단된 사용자:', Object.keys(blockedUsers).length, '명');
+        callback(user, points, blockedUsers);
       },
       (error: any) => {
         console.error('사용자 구독 오류:', error);
@@ -239,6 +250,7 @@ class FirebaseFirestoreService {
             bio: data.bio,
             deletionRequestedAt: data.deletionRequestedAt?.toMillis(),
             deletionScheduledAt: data.deletionScheduledAt?.toMillis(),
+            lastAttendanceDate: data.lastAttendanceDate,
           };
           console.log('사용자 매핑:', user.id, user.name);
           return user;
@@ -293,6 +305,7 @@ class FirebaseFirestoreService {
               bio: data.bio,
               deletionRequestedAt: data.deletionRequestedAt?.toMillis(),
               deletionScheduledAt: data.deletionScheduledAt?.toMillis(),
+              lastAttendanceDate: data.lastAttendanceDate,
             };
           });
         console.log('사용자 목록 실시간 업데이트:', users.length, '명');
@@ -1067,6 +1080,23 @@ class FirebaseFirestoreService {
       console.log('회원탈퇴 취소 완료:', userId);
     } catch (error) {
       console.error('회원탈퇴 취소 오류:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 차단된 사용자 목록 업데이트
+   */
+  async updateBlockedUsers(userId: string, blockedUsers: Record<string, number>): Promise<void> {
+    try {
+      const userRef = doc(db, this.COLLECTIONS.USERS, userId);
+      await updateDoc(userRef, {
+        blockedUsers: blockedUsers,
+        updatedAt: Timestamp.now(),
+      });
+      console.log('차단된 사용자 목록 업데이트 완료:', Object.keys(blockedUsers).length, '명');
+    } catch (error) {
+      console.error('차단된 사용자 목록 업데이트 오류:', error);
       throw error;
     }
   }

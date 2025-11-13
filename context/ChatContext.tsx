@@ -15,7 +15,7 @@ interface ChatContextType {
   messages: Record<string, Message[]>;
   points: number;
   posts: Post[];
-  blockedUsers: string[];
+  blockedUsers: Record<string, number>; // 차단된 사용자 목록 (userId -> blockedAt timestamp)
   reports: Report[]; // 신고 목록
   createOrOpenChat: (user: User) => Promise<string>;
   sendMessage: (chatRoomId: string, text: string) => void;
@@ -30,8 +30,8 @@ interface ChatContextType {
   updateRegion: (region: Region) => void;
   getDistance: (user1: User, user2: User) => number | null;
   formatDistance: (distance: number | null) => string;
-  blockUser: (userId: string) => void;
-  unblockUser: (userId: string) => void;
+  blockUser: (userId: string) => Promise<void>;
+  unblockUser: (userId: string) => Promise<void>;
   isBlocked: (userId: string) => boolean;
   reportPost: (postId: string, reason: ReportReason, description?: string) => void;
   reportUser: (userId: string, reason: ReportReason, description?: string) => void;
@@ -40,6 +40,8 @@ interface ChatContextType {
   updateReportStatus: (reportId: string, status: 'pending' | 'resolved' | 'rejected') => void; // 관리자용: 신고 상태 업데이트
   requestAccountDeletion: () => Promise<void>; // 회원탈퇴 요청
   cancelAccountDeletion: () => Promise<void>; // 회원탈퇴 취소
+  checkAttendance: () => Promise<boolean>; // 출석체크
+  canCheckAttendance: () => boolean; // 출석체크 가능 여부 확인
 }
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
@@ -70,7 +72,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
   const [currentUser, setCurrentUser] = useState<User>(DEFAULT_USER);
   const [contacts, setContacts] = useState<User[]>([]); // Firestore에서 로드
   const [points, setPoints] = useState<number>(1000); // 초기 포인트 1000
-  const [blockedUsers, setBlockedUsers] = useState<string[]>([]); // 차단된 사용자 목록
+  const [blockedUsers, setBlockedUsers] = useState<Record<string, number>>({}); // 차단된 사용자 목록 (userId -> blockedAt timestamp)
   const [reports, setReports] = useState<Report[]>([]); // 신고 목록
 
   const { initialRooms, initialMessages } = useMemo(() => createInitialState(), []);
@@ -195,7 +197,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
         setPoints(1000);
         setChatRooms([]);
         setMessages({});
-        setBlockedUsers([]);
+        setBlockedUsers({});
         setReports([]);
         return;
       }
@@ -206,13 +208,19 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       
       unsubscribeUser = firebaseFirestoreService.subscribeToUser(
         firebaseUser.uid,
-        (userData, userPoints) => {
+        (userData, userPoints, blockedUsersData) => {
           if (userData) {
             // Firestore에서 가져온 사용자 정보로 업데이트
             console.log('사용자 정보 실시간 업데이트:', userData.name);
             console.log('사용자 위치 정보:', userData.location);
             console.log('사용자 지역 정보:', userData.region);
             console.log('사용자 포인트:', userPoints);
+            console.log('차단된 사용자:', blockedUsersData ? Object.keys(blockedUsersData).length : 0, '명');
+            
+            // 차단된 사용자 목록 업데이트
+            if (blockedUsersData) {
+              setBlockedUsers(blockedUsersData);
+            }
             
             // region이 없으면 기본값으로 설정하고 Firestore에 저장
             const finalRegion = userData.region || DEFAULT_REGION;
@@ -277,6 +285,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
               bio: userData.bio,
               deletionRequestedAt: userData.deletionRequestedAt,
               deletionScheduledAt: userData.deletionScheduledAt,
+              lastAttendanceDate: userData.lastAttendanceDate,
             });
             
             // 포인트 정보도 Firestore에서 가져온 값으로 업데이트
@@ -932,11 +941,30 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   // 사용자 차단
-  const blockUser = useCallback((userId: string) => {
-    setBlockedUsers((prev) => {
-      if (prev.includes(userId)) return prev;
-      return [...prev, userId];
-    });
+  const blockUser = useCallback(async (userId: string) => {
+    const firebaseUser = auth.currentUser;
+    if (!firebaseUser) {
+      console.error('로그인이 필요합니다.');
+      return;
+    }
+
+    // 이미 차단된 사용자면 그대로 반환
+    if (blockedUsers[userId]) {
+      return;
+    }
+
+    const newBlockedUsers = { ...blockedUsers, [userId]: Date.now() };
+    
+    // 로컬 상태 업데이트
+    setBlockedUsers(newBlockedUsers);
+    
+    // Firestore에 저장
+    try {
+      await firebaseFirestoreService.updateBlockedUsers(firebaseUser.uid, newBlockedUsers);
+    } catch (error) {
+      console.error('차단 정보 저장 실패:', error);
+      // 실패해도 로컬 상태는 유지
+    }
     
     // 차단된 사용자와의 채팅방 제거
     setChatRooms((prev) => 
@@ -960,16 +988,39 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       });
       return updated;
     });
-  }, [chatRooms]);
+  }, [chatRooms, blockedUsers]);
 
   // 사용자 차단 해제
-  const unblockUser = useCallback((userId: string) => {
-    setBlockedUsers((prev) => prev.filter((id) => id !== userId));
-  }, []);
+  const unblockUser = useCallback(async (userId: string) => {
+    const firebaseUser = auth.currentUser;
+    if (!firebaseUser) {
+      console.error('로그인이 필요합니다.');
+      return;
+    }
+
+    // 이미 차단되지 않은 사용자면 그대로 반환
+    if (!blockedUsers[userId]) {
+      return;
+    }
+
+    const updatedBlockedUsers = { ...blockedUsers };
+    delete updatedBlockedUsers[userId];
+    
+    // 로컬 상태 업데이트
+    setBlockedUsers(updatedBlockedUsers);
+    
+    // Firestore에 저장
+    try {
+      await firebaseFirestoreService.updateBlockedUsers(firebaseUser.uid, updatedBlockedUsers);
+    } catch (error) {
+      console.error('차단 해제 정보 저장 실패:', error);
+      // 실패해도 로컬 상태는 유지
+    }
+  }, [blockedUsers]);
 
   // 사용자 차단 여부 확인
   const isBlocked = useCallback((userId: string): boolean => {
-    return blockedUsers.includes(userId);
+    return !!blockedUsers[userId];
   }, [blockedUsers]);
 
   // 게시글 신고
@@ -1109,6 +1160,89 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     }
   }, [currentUser.id]);
 
+  // 한국 시간 기준 오늘 날짜 가져오기 (안전한 방법)
+  const getKoreaDateString = useCallback((): string => {
+    try {
+      const now = new Date();
+      // UTC 시간에 9시간(한국 시간대)을 더하기
+      const koreaTimeMs = now.getTime() + (9 * 60 * 60 * 1000);
+      const koreaTime = new Date(koreaTimeMs);
+      
+      // UTC 메서드를 사용하여 날짜 추출 (UTC+9 시간대의 날짜)
+      const year = koreaTime.getUTCFullYear();
+      const month = String(koreaTime.getUTCMonth() + 1).padStart(2, '0');
+      const day = String(koreaTime.getUTCDate()).padStart(2, '0');
+      
+      return `${year}-${month}-${day}`;
+    } catch (error) {
+      console.error('날짜 가져오기 오류:', error);
+      // 폴백: 로컬 시간 사용
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+  }, []);
+
+  // 출석체크 가능 여부 확인 (매일 오전 00시 기준)
+  const canCheckAttendance = useCallback((): boolean => {
+    try {
+      const today = getKoreaDateString();
+      const lastAttendanceDate = currentUser.lastAttendanceDate;
+      
+      // 마지막 출석체크 날짜가 없거나 오늘과 다르면 출석체크 가능
+      return !lastAttendanceDate || lastAttendanceDate !== today;
+    } catch (error) {
+      console.error('출석체크 가능 여부 확인 오류:', error);
+      return false;
+    }
+  }, [currentUser.lastAttendanceDate, getKoreaDateString]);
+
+  // 출석체크 실행
+  const checkAttendance = useCallback(async (): Promise<boolean> => {
+    const firebaseUser = auth.currentUser;
+    if (!firebaseUser) {
+      Alert.alert('오류', '로그인이 필요합니다.');
+      return false;
+    }
+
+    // 출석체크 가능 여부 확인
+    if (!canCheckAttendance()) {
+      Alert.alert('알림', '오늘은 이미 출석체크를 완료했습니다.\n내일 다시 시도해주세요.');
+      return false;
+    }
+
+    try {
+      // 한국 시간 기준으로 오늘 날짜 가져오기
+      const today = getKoreaDateString();
+
+      // 포인트 추가 (50포인트)
+      await addPoints(50);
+
+      // 마지막 출석체크 날짜 업데이트
+      await firebaseFirestoreService.createOrUpdateUser({
+        id: firebaseUser.uid,
+        phoneNumber: '', // 업데이트만 하므로 불필요
+        name: currentUser.name,
+        lastAttendanceDate: today,
+      });
+
+      // 로컬 상태 업데이트
+      setCurrentUser((prev) => ({
+        ...prev,
+        lastAttendanceDate: today,
+      }));
+
+      Alert.alert('출석체크 완료', '50포인트가 지급되었습니다!');
+      return true;
+    } catch (error: any) {
+      console.error('출석체크 실패:', error);
+      Alert.alert('오류', error.message || '출석체크에 실패했습니다.');
+      return false;
+    }
+  }, [currentUser.name, addPoints, canCheckAttendance, getKoreaDateString]);
+
   const value: ChatContextType = useMemo(
     () => ({
       currentUser,
@@ -1142,8 +1276,10 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       updateReportStatus,
       requestAccountDeletion,
       cancelAccountDeletion,
+      checkAttendance,
+      canCheckAttendance,
     }),
-    [currentUser, contacts, chatRooms, messages, points, posts, blockedUsers, reports, createOrOpenChat, sendMessage, getMessages, getChatPartner, markAsRead, createPost, startChatFromPost, deductPoints, addPoints, updateProfile, updateRegion, getDistance, formatDistance, blockUser, unblockUser, isBlocked, reportPost, reportUser, deletePost, deleteUser, updateReportStatus, requestAccountDeletion, cancelAccountDeletion]
+    [currentUser, contacts, chatRooms, messages, points, posts, blockedUsers, reports, createOrOpenChat, sendMessage, getMessages, getChatPartner, markAsRead, createPost, startChatFromPost, deductPoints, addPoints, updateProfile, updateRegion, getDistance, formatDistance, blockUser, unblockUser, isBlocked, reportPost, reportUser, deletePost, deleteUser, updateReportStatus, requestAccountDeletion, cancelAccountDeletion, checkAttendance, canCheckAttendance]
   );
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;

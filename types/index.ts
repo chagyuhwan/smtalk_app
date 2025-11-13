@@ -39,6 +39,7 @@ export interface User {
   bio?: string; // 자기소개
   deletionRequestedAt?: number; // 탈퇴 요청일 (타임스탬프)
   deletionScheduledAt?: number; // 탈퇴 예정일 (타임스탬프, 요청일 + 30일)
+  lastAttendanceDate?: string; // 마지막 출석체크 날짜 (YYYY-MM-DD 형식)
 }
 
 export interface Message {
