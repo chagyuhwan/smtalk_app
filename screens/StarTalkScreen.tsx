@@ -20,27 +20,30 @@ import * as MediaLibrary from 'expo-media-library';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system';
 import { useChat } from '../context/ChatContext';
-import { Post, BDSMPreference } from '../types';
+import { Post, BDSMPreference, Region } from '../types';
 import { RootStackParamList } from '../navigation/types';
+import { REGION_NAMES, REGION_LIST } from '../utils/regions';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 const CHAT_COST = 50;
 
-type PostFilter = 'all' | 'nearby' | 'my';
+type PostFilter = 'region' | 'my';
 type GenderFilter = 'all' | 'male' | 'female';
 type BDSMFilter = 'all' | BDSMPreference;
 
 export default function StarTalkScreen() {
   const navigation = useNavigation<NavigationProp>();
-  const { currentUser, points, posts, createPost, startChatFromPost, contacts, getDistance, formatDistance, blockedUsers, isBlocked, reportPost, blockUser } = useChat();
+  const { currentUser, points, posts, createPost, startChatFromPost, contacts, blockedUsers, isBlocked, reportPost, blockUser } = useChat();
   const [isWriting, setIsWriting] = useState(false);
   const [postContent, setPostContent] = useState('');
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
-  const [postFilter, setPostFilter] = useState<PostFilter>('all');
+  const [postFilter, setPostFilter] = useState<PostFilter>('region');
+  const [selectedRegion, setSelectedRegion] = useState<Region | 'all'>('all');
   const [genderFilter, setGenderFilter] = useState<GenderFilter>('all');
   const [bdsmFilter, setBdsmFilter] = useState<BDSMFilter>('all');
   const [showPostDropdown, setShowPostDropdown] = useState(false);
+  const [showRegionDropdown, setShowRegionDropdown] = useState(false);
   const [showGenderDropdown, setShowGenderDropdown] = useState(false);
   const [showBdsmDropdown, setShowBdsmDropdown] = useState(false);
 
@@ -83,50 +86,35 @@ export default function StarTalkScreen() {
     }
 
     // 게시글 필터 적용
-    if (postFilter === 'nearby') {
-      // 근처 게시글 필터링 (10km 이내)
-      const distanceCache = new Map<string, number>();
-      filtered = filtered
-        .map((post) => {
-          if (post.authorId === currentUser.id) return null;
-          const author = contacts.find((c) => c.id === post.authorId);
-          if (!author) return null;
-          const distance =
-            distanceCache.get(post.authorId) ??
-            getDistance(currentUser, author);
-          if (distance === null || distance === undefined || distance > 10) return null;
-          distanceCache.set(post.authorId, distance ?? Infinity);
-          return { post, distance: distance ?? Infinity };
-        })
-        .filter((item): item is { post: Post; distance: number } => item !== null)
-        .sort((a, b) => {
-          if (a.distance === b.distance) {
-            return b.post.timestamp - a.post.timestamp;
+    if (postFilter === 'region') {
+      // 지역별 필터링
+      if (selectedRegion !== 'all') {
+        filtered = filtered.filter((post) => {
+          if (post.authorId === currentUser.id) {
+            return currentUser.region === selectedRegion;
           }
-          return a.distance - b.distance;
-        })
-        .map((item) => item.post);
-      return filtered;
-    }
-
-    if (postFilter === 'my') {
+          const author = contacts.find((c) => c.id === post.authorId);
+          return author?.region === selectedRegion;
+        });
+      }
+    } else if (postFilter === 'my') {
       filtered = filtered.filter((post) => post.authorId === currentUser.id);
     }
 
     filtered.sort((a, b) => b.timestamp - a.timestamp);
     return filtered;
-  }, [posts, postFilter, genderFilter, bdsmFilter, currentUser, contacts, getDistance, isBlocked]);
+  }, [posts, postFilter, selectedRegion, genderFilter, bdsmFilter, currentUser, contacts, isBlocked]);
 
   const postFilterLabel = useMemo(() => {
     switch (postFilter) {
-      case 'nearby':
-        return '근처';
       case 'my':
         return '내글';
+      case 'region':
+        return selectedRegion === 'all' ? '지역' : REGION_NAMES[selectedRegion];
       default:
-        return '전체글';
+        return '지역';
     }
-  }, [postFilter]);
+  }, [postFilter, selectedRegion]);
 
   const genderFilterLabel = useMemo(() => {
     switch (genderFilter) {
@@ -154,12 +142,13 @@ export default function StarTalkScreen() {
     }
   }, [bdsmFilter]);
 
-  const isPostFilterActive = showPostDropdown || postFilter !== 'all';
+  const isPostFilterActive = showPostDropdown || showRegionDropdown || postFilter !== 'region' || selectedRegion !== 'all';
   const isGenderFilterActive = showGenderDropdown || genderFilter !== 'all';
   const isBdsmFilterActive = showBdsmDropdown || bdsmFilter !== 'all';
 
   const closeAllDropdowns = useCallback(() => {
     setShowPostDropdown(false);
+    setShowRegionDropdown(false);
     setShowGenderDropdown(false);
     setShowBdsmDropdown(false);
   }, []);
@@ -167,6 +156,14 @@ export default function StarTalkScreen() {
   const selectPostFilter = useCallback((value: PostFilter) => {
     setPostFilter(value);
     setShowPostDropdown(false);
+    if (value === 'region') {
+      setShowRegionDropdown(true);
+    }
+  }, []);
+
+  const selectRegion = useCallback((value: Region | 'all') => {
+    setSelectedRegion(value);
+    setShowRegionDropdown(false);
   }, []);
 
   const selectGenderFilter = useCallback((value: GenderFilter) => {
@@ -179,7 +176,7 @@ export default function StarTalkScreen() {
     setShowBdsmDropdown(false);
   }, []);
 
-  const isDropdownOpen = showPostDropdown || showGenderDropdown || showBdsmDropdown;
+  const isDropdownOpen = showPostDropdown || showRegionDropdown || showGenderDropdown || showBdsmDropdown;
 
   const formatTime = useCallback((timestamp: number): string => {
     const diff = Date.now() - timestamp;
@@ -544,8 +541,6 @@ export default function StarTalkScreen() {
     const isMyPost = item.authorId === currentUser.id;
     // 내 게시글인 경우 currentUser를 사용, 아니면 contacts에서 찾기
     const author = isMyPost ? currentUser : contacts.find((c) => c.id === item.authorId);
-    const distance = author && !isMyPost ? getDistance(currentUser, author) : null;
-    const distanceText = formatDistance(distance);
 
     return (
       <TouchableOpacity
@@ -569,9 +564,6 @@ export default function StarTalkScreen() {
                   <Text style={styles.gender}>
                     {author.gender === 'male' ? '남' : '여'}
                   </Text>
-                )}
-                {!isMyPost && distance !== null && (
-                  <Text style={styles.distanceBadge}>{distanceText}</Text>
                 )}
               </View>
               <Text style={styles.postTime}>
@@ -624,7 +616,7 @@ export default function StarTalkScreen() {
         </View>
       </TouchableOpacity>
     );
-  }, [currentUser, contacts, formatTime, handleChatFromPost, getDistance, formatDistance]);
+  }, [currentUser, contacts, formatTime, handleChatFromPost]);
 
   const keyExtractor = useCallback((item: Post) => item.id, []);
 
@@ -660,7 +652,11 @@ export default function StarTalkScreen() {
             style={styles.filterBarItem}
             activeOpacity={0.7}
             onPress={() => {
-              setShowPostDropdown((prev) => !prev);
+              if (postFilter === 'region') {
+                setShowRegionDropdown((prev) => !prev);
+              } else {
+                setShowPostDropdown((prev) => !prev);
+              }
               setShowGenderDropdown(false);
               setShowBdsmDropdown(false);
             }}
@@ -672,7 +668,7 @@ export default function StarTalkScreen() {
             <Text
               style={[
                 styles.filterBarLabel,
-                postFilter !== 'all' && styles.filterBarLabelActive,
+                (postFilter !== 'region' || selectedRegion !== 'all') && styles.filterBarLabelActive,
               ]}
             >
               {postFilterLabel}
@@ -685,6 +681,7 @@ export default function StarTalkScreen() {
             onPress={() => {
               setShowGenderDropdown((prev) => !prev);
               setShowPostDropdown(false);
+              setShowRegionDropdown(false);
               setShowBdsmDropdown(false);
             }}
             onLayout={(e) => {
@@ -708,6 +705,7 @@ export default function StarTalkScreen() {
             onPress={() => {
               setShowBdsmDropdown((prev) => !prev);
               setShowPostDropdown(false);
+              setShowRegionDropdown(false);
               setShowGenderDropdown(false);
             }}
             onLayout={(e) => {
@@ -740,19 +738,11 @@ export default function StarTalkScreen() {
             ]}
           >
             <TouchableOpacity
-              style={[styles.dropdownRow, postFilter === 'all' && styles.dropdownRowActive]}
-              onPress={() => selectPostFilter('all')}
+              style={[styles.dropdownRow, postFilter === 'region' && styles.dropdownRowActive]}
+              onPress={() => selectPostFilter('region')}
             >
-              <Text style={[styles.dropdownRowText, postFilter === 'all' && styles.dropdownRowTextActive]}>
-                전체글
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.dropdownRow, postFilter === 'nearby' && styles.dropdownRowActive]}
-              onPress={() => selectPostFilter('nearby')}
-            >
-              <Text style={[styles.dropdownRowText, postFilter === 'nearby' && styles.dropdownRowTextActive]}>
-                근처
+              <Text style={[styles.dropdownRowText, postFilter === 'region' && styles.dropdownRowTextActive]}>
+                지역
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -763,6 +753,44 @@ export default function StarTalkScreen() {
                 내글
               </Text>
             </TouchableOpacity>
+          </View>
+        </TouchableWithoutFeedback>
+      )}
+
+      {showRegionDropdown && (
+        <TouchableWithoutFeedback onPress={closeAllDropdowns}>
+          <View
+            style={[
+              styles.dropdownPanel,
+              {
+                top: dropdownTop,
+                left: FILTER_MARGIN_HORIZONTAL + FILTER_PADDING_HORIZONTAL + postMetrics.x,
+                width: Math.max(postMetrics.width, 160),
+                maxHeight: 400,
+              },
+            ]}
+          >
+            <ScrollView style={{ maxHeight: 400 }}>
+              <TouchableOpacity
+                style={[styles.dropdownRow, selectedRegion === 'all' && styles.dropdownRowActive]}
+                onPress={() => selectRegion('all')}
+              >
+                <Text style={[styles.dropdownRowText, selectedRegion === 'all' && styles.dropdownRowTextActive]}>
+                  전체 지역
+                </Text>
+              </TouchableOpacity>
+              {REGION_LIST.map((region) => (
+                <TouchableOpacity
+                  key={region}
+                  style={[styles.dropdownRow, selectedRegion === region && styles.dropdownRowActive]}
+                  onPress={() => selectRegion(region)}
+                >
+                  <Text style={[styles.dropdownRowText, selectedRegion === region && styles.dropdownRowTextActive]}>
+                    {REGION_NAMES[region]}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
           </View>
         </TouchableWithoutFeedback>
       )}
@@ -873,8 +901,8 @@ export default function StarTalkScreen() {
             <Text style={styles.emptyText}>
               {postFilter === 'my'
                 ? '작성한 게시글이 없어요'
-                : postFilter === 'nearby'
-                ? '근처에 게시글이 없어요'
+                : postFilter === 'region' && selectedRegion !== 'all'
+                ? `${REGION_NAMES[selectedRegion]} 지역의 게시글이 없어요`
                 : genderFilter === 'male'
                 ? '남성 사용자의 게시글이 없어요'
                 : genderFilter === 'female'
@@ -884,8 +912,8 @@ export default function StarTalkScreen() {
             <Text style={styles.emptySubtext}>
               {postFilter === 'my'
                 ? '첫 게시글을 작성해보세요!'
-                : postFilter === 'nearby'
-                ? '다른 지역의 게시글을 확인해보세요'
+                : postFilter === 'region' && selectedRegion !== 'all'
+                ? '다른 지역을 선택해보세요'
                 : genderFilter !== 'all'
                 ? '다른 성별을 선택해보세요'
                 : '첫 게시글을 작성해보세요!'}
@@ -1205,15 +1233,6 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: '#667085',
     marginRight: 6,
-  },
-  distanceBadge: {
-    fontSize: 12,
-    fontWeight: '500',
-    color: '#4C6EF5',
-    backgroundColor: '#E8EDFF',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 8,
   },
   postTime: {
     fontSize: 12,

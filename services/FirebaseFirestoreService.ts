@@ -22,7 +22,7 @@ import {
   DocumentData,
 } from 'firebase/firestore';
 import { db } from '../config/firebase';
-import { User, Post, Report, ChatRoom, Message, Purchase } from '../types';
+import { User, Post, Report, ChatRoom, Message, Purchase, Region } from '../types';
 
 class FirebaseFirestoreService {
   // 컬렉션 이름
@@ -49,6 +49,7 @@ class FirebaseFirestoreService {
     age?: number;
     latitude?: number;
     longitude?: number;
+    region?: Region;
     isAdmin?: boolean;
     points?: number;
     bdsmPreference?: 'dominant' | 'submissive' | 'switch' | 'none';
@@ -80,6 +81,9 @@ class FirebaseFirestoreService {
       }
       if (userData.longitude !== undefined) {
         cleanedData.longitude = userData.longitude;
+      }
+      if (userData.region !== undefined) {
+        cleanedData.region = userData.region;
       }
       if (userData.isAdmin !== undefined) {
         cleanedData.isAdmin = userData.isAdmin;
@@ -123,6 +127,7 @@ class FirebaseFirestoreService {
         location: data.latitude && data.longitude
           ? { latitude: data.latitude, longitude: data.longitude }
           : undefined,
+        region: data.region,
         isAdmin: data.isAdmin || false,
         points: data.points || 0, // 포인트 정보 포함
         bdsmPreference: data.bdsmPreference,
@@ -161,12 +166,13 @@ class FirebaseFirestoreService {
           location: data.latitude && data.longitude
             ? { latitude: data.latitude, longitude: data.longitude }
             : undefined,
+          region: data.region,
           isAdmin: data.isAdmin || false,
           bdsmPreference: data.bdsmPreference,
           bio: data.bio,
         };
         const points = data.points !== undefined ? data.points : 1000; // 기본값 1000
-        console.log('사용자 정보 실시간 업데이트:', user.id, user.name, user.location, '포인트:', points);
+        console.log('사용자 정보 실시간 업데이트:', user.id, user.name, user.location, '지역:', user.region, '포인트:', points);
         callback(user, points);
       },
       (error: any) => {
@@ -206,6 +212,7 @@ class FirebaseFirestoreService {
             location: data.latitude && data.longitude
               ? { latitude: data.latitude, longitude: data.longitude }
               : undefined,
+            region: data.region,
             isAdmin: data.isAdmin || false,
             bdsmPreference: data.bdsmPreference,
             bio: data.bio,
@@ -252,6 +259,7 @@ class FirebaseFirestoreService {
               location: data.latitude && data.longitude
                 ? { latitude: data.latitude, longitude: data.longitude }
                 : undefined,
+              region: data.region,
               isAdmin: data.isAdmin || false,
               bdsmPreference: data.bdsmPreference,
               bio: data.bio,
@@ -294,6 +302,7 @@ class FirebaseFirestoreService {
         location: data.latitude && data.longitude
           ? { latitude: data.latitude, longitude: data.longitude }
           : undefined,
+        region: data.region,
         isAdmin: data.isAdmin || false,
         bdsmPreference: data.bdsmPreference,
         bio: data.bio,

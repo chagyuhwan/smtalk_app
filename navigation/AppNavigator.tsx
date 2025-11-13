@@ -102,20 +102,9 @@ function MainTabs() {
 
 // ChatScreen 헤더 컴포넌트
 function ChatHeader({ partner }: { partner: RootStackParamList['Chat']['partner'] }) {
-  const { currentUser, contacts, getDistance, formatDistance } = useChat();
-  
-  // contacts 배열에서 최신 정보 가져오기 (위치 정보 포함)
-  const latestPartner = contacts.find(c => c.id === partner.id) || partner;
-  
-  const distance = getDistance(currentUser, latestPartner);
-  const distanceText = formatDistance(distance);
-
   return (
     <View style={headerStyles.container}>
       <Text style={headerStyles.name}>{partner.name}</Text>
-      {distance !== null && distanceText !== '위치 정보 없음' && (
-        <Text style={headerStyles.distance}>{distanceText}</Text>
-      )}
     </View>
   );
 }
@@ -222,15 +211,5 @@ const headerStyles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
     color: '#111',
-    marginRight: 8,
-  },
-  distance: {
-    fontSize: 12,
-    fontWeight: '500',
-    color: '#4C6EF5',
-    backgroundColor: '#E8EDFF',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 10,
   },
 });

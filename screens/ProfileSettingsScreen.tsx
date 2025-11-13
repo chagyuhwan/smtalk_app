@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -16,7 +16,8 @@ import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useChat } from '../context/ChatContext';
 import { RootStackParamList } from '../navigation/types';
-import { Gender, BDSMPreference } from '../types';
+import { Gender, BDSMPreference, Region } from '../types';
+import { REGION_NAMES, REGION_LIST } from '../utils/regions';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -31,7 +32,7 @@ const BDSM_LABELS: Record<BDSMPreference, string> = {
 
 export default function ProfileSettingsScreen() {
   const navigation = useNavigation<NavigationProp>();
-  const { currentUser, updateProfile } = useChat();
+  const { currentUser, updateProfile, updateRegion } = useChat();
   const [name, setName] = useState(currentUser.name);
   const [gender, setGender] = useState<Gender | undefined>(currentUser.gender);
   const [avatarUri, setAvatarUri] = useState<string | undefined>(currentUser.avatar);
@@ -40,7 +41,21 @@ export default function ProfileSettingsScreen() {
     currentUser.bdsmPreference
   );
   const [bio, setBio] = useState<string>(currentUser.bio || '');
+  const [region, setRegion] = useState<Region | undefined>(currentUser.region || 'seoul');
   const [showBdsmDropdown, setShowBdsmDropdown] = useState(false);
+  const [showRegionDropdown, setShowRegionDropdown] = useState(false);
+
+  // 컴포넌트 마운트 시에만 currentUser.region으로 초기화
+  useEffect(() => {
+    console.log('ProfileSettingsScreen 마운트 - currentUser.region:', currentUser.region);
+    if (currentUser.region && !region) {
+      // region이 아직 설정되지 않았을 때만 currentUser.region으로 초기화
+      setRegion(currentUser.region);
+    } else if (!region) {
+      // 둘 다 없으면 기본값 설정
+      setRegion('seoul');
+    }
+  }, []); // 마운트 시에만 실행
 
   const handleSave = useCallback(async () => {
     const trimmedName = name.trim();
@@ -78,6 +93,17 @@ export default function ProfileSettingsScreen() {
 
     try {
       await updateProfile(trimmedName, finalGender, avatarUri, finalAge, bdsmPreference, bio.trim() || undefined);
+      // 지역이 변경된 경우 또는 지역이 없을 때 업데이트
+      const finalRegion = region || 'seoul';
+      if (finalRegion !== currentUser.region) {
+        console.log('지역 변경 감지:', {
+          현재지역: currentUser.region,
+          새지역: finalRegion,
+        });
+        await updateRegion(finalRegion);
+      } else {
+        console.log('지역 변경 없음:', finalRegion);
+      }
       Alert.alert('성공', '프로필이 업데이트되었습니다.', [
         {
           text: '확인',
@@ -88,7 +114,7 @@ export default function ProfileSettingsScreen() {
       console.error('프로필 업데이트 오류:', error);
       Alert.alert('오류', `프로필 업데이트에 실패했습니다: ${error.message || '알 수 없는 오류'}`);
     }
-  }, [name, gender, avatarUri, age, bdsmPreference, bio, currentUser.gender, updateProfile, navigation]);
+  }, [name, gender, avatarUri, age, bdsmPreference, bio, region, currentUser.gender, currentUser.region, updateProfile, updateRegion, navigation]);
 
   const pickImage = useCallback(async () => {
     // 권한 요청
@@ -136,6 +162,9 @@ export default function ProfileSettingsScreen() {
     return BDSM_LABELS[p];
   };
 
+  // 디버깅: 컴포넌트 렌더링 확인
+  console.log('ProfileSettingsScreen 렌더링 - region:', region, 'currentUser.region:', currentUser.region);
+  
   return (
     <View style={styles.container}>
       <ScrollView style={styles.content} contentContainerStyle={styles.contentContainer}>
@@ -244,6 +273,67 @@ export default function ProfileSettingsScreen() {
             />
           </View>
         </View>
+
+        {/* 지역 선택 필드 - 항상 표시 */}
+        <View style={styles.fieldContainer} testID="region-field">
+          <View style={styles.inlineInputWrapper}>
+            <Text style={styles.inlineLabel}>지역</Text>
+            <TouchableOpacity
+              style={styles.inlineDropdownButton}
+              onPress={() => {
+                console.log('지역 선택 버튼 클릭, 현재 region:', region);
+                console.log('REGION_NAMES:', REGION_NAMES);
+                console.log('region 값:', region, '타입:', typeof region);
+                setShowRegionDropdown(true);
+              }}
+            >
+              <Text style={[styles.inlineDropdownText, !region && styles.dropdownPlaceholder]}>
+                {region ? (REGION_NAMES[region] || '알 수 없음') : '선택하세요'}
+              </Text>
+              <Text style={styles.dropdownArrow}>▼</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        <Modal
+          visible={showRegionDropdown}
+          transparent={true}
+          animationType="fade"
+          onRequestClose={() => setShowRegionDropdown(false)}
+        >
+          <TouchableOpacity
+            style={styles.modalOverlay}
+            activeOpacity={1}
+            onPress={() => setShowRegionDropdown(false)}
+          >
+            <View style={styles.dropdownModal}>
+              <ScrollView style={{ maxHeight: 400 }}>
+                {REGION_LIST.map((reg) => (
+                  <TouchableOpacity
+                    key={reg}
+                    style={[
+                      styles.dropdownOption,
+                      region === reg && styles.dropdownOptionSelected,
+                    ]}
+                    onPress={() => {
+                      setRegion(reg);
+                      setShowRegionDropdown(false);
+                    }}
+                  >
+                    <Text
+                      style={[
+                        styles.dropdownOptionText,
+                        region === reg && styles.dropdownOptionTextSelected,
+                      ]}
+                    >
+                      {REGION_NAMES[reg]}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+          </TouchableOpacity>
+        </Modal>
 
         <View style={styles.fieldContainer}>
           <View style={styles.inlineInputWrapper}>

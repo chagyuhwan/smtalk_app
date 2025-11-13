@@ -1,10 +1,11 @@
 import React, { createContext, useContext, useMemo, useState, useCallback, ReactNode, useEffect } from 'react';
-import { ChatRoom, Message, User, Post, Gender, Location, ReportReason, Report, BDSMPreference } from '../types';
-import * as LocationService from 'expo-location';
+import { Alert } from 'react-native';
+import { ChatRoom, Message, User, Post, Gender, Location, ReportReason, Report, BDSMPreference, Region } from '../types';
 import { firebaseFirestoreService } from '../services/FirebaseFirestoreService';
 import { firebaseStorageService } from '../services/FirebaseStorageService';
 import { auth } from '../config/firebase';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
+import { getLocationFromRegion, REGION_COORDINATES } from '../utils/regions';
 
 interface ChatContextType {
   currentUser: User;
@@ -21,11 +22,11 @@ interface ChatContextType {
   getChatPartner: (chatRoomId: string) => User | undefined;
   markAsRead: (chatRoomId: string) => void;
   createPost: (content: string, images?: string[]) => Promise<void>;
-  startChatFromPost: (postId: string) => string | null;
+  startChatFromPost: (postId: string) => Promise<string | null>;
   deductPoints: (amount: number) => Promise<boolean>;
   addPoints: (amount: number) => Promise<void>;
   updateProfile: (name: string, gender?: Gender, avatar?: string, age?: number, bdsmPreference?: BDSMPreference, bio?: string) => void;
-  updateLocation: (location: Location) => void;
+  updateRegion: (region: Region) => void;
   getDistance: (user1: User, user2: User) => number | null;
   formatDistance: (distance: number | null) => string;
   blockUser: (userId: string) => void;
@@ -40,17 +41,16 @@ interface ChatContextType {
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
 
-// 서울 중심 좌표 (시청 근처) - 기본 위치
-const DEFAULT_LOCATION: Location = {
-  latitude: 37.5665,
-  longitude: 126.9780,
-};
+// 기본 지역: 서울
+const DEFAULT_REGION: Region = 'seoul';
+const DEFAULT_LOCATION: Location = REGION_COORDINATES[DEFAULT_REGION];
 
 // 기본 사용자 (로그아웃 상태일 때만 사용)
 const DEFAULT_USER: User = {
   id: '',
   name: '',
   location: DEFAULT_LOCATION,
+  region: DEFAULT_REGION,
   isAdmin: false,
 };
 
@@ -77,36 +77,19 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
   // 게시글은 Firestore에서 실시간으로 로드
   const [posts, setPosts] = useState<Post[]>([]);
 
-  // 앱 시작 시 위치 정보 자동 가져오기
-  // 테스트를 위해 기본 위치(서울)를 유지하고, 실제 위치는 프로필 설정에서만 업데이트
+  // 앱 시작 시 기본 지역(서울) 설정
   useEffect(() => {
-    // 기본 위치가 이미 설정되어 있으면 스킵
-    if (currentUser.location) {
+    // 기본 지역이 이미 설정되어 있으면 스킵
+    if (currentUser.region) {
       return;
     }
 
-    // 기본 위치(서울)로 설정
+    // 기본 지역(서울)로 설정
     setCurrentUser((prev) => ({
       ...prev,
+      region: DEFAULT_REGION,
       location: DEFAULT_LOCATION,
     }));
-
-    // 실제 위치는 선택적으로 가져오기 (주석 처리)
-    // try {
-    //   const { status } = await LocationService.requestForegroundPermissionsAsync();
-    //   if (status === 'granted') {
-    //     const location = await LocationService.getCurrentPositionAsync({});
-    //     setCurrentUser((prev) => ({
-    //       ...prev,
-    //       location: {
-    //         latitude: location.coords.latitude,
-    //         longitude: location.coords.longitude,
-    //       },
-    //     }));
-    //   }
-    // } catch (error) {
-    //   console.log('위치 정보를 가져올 수 없습니다. 기본 위치(서울)를 사용합니다:', error);
-    // }
   }, []); // 최초 한 번만 실행
 
   // Firebase에서 게시글 실시간 로드
@@ -167,7 +150,8 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
             name: u.name, 
             age: u.age, 
             gender: u.gender,
-            location: u.location 
+            location: u.location,
+            region: u.region
           })));
           setContacts(users);
         },
@@ -224,7 +208,37 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
             // Firestore에서 가져온 사용자 정보로 업데이트
             console.log('사용자 정보 실시간 업데이트:', userData.name);
             console.log('사용자 위치 정보:', userData.location);
+            console.log('사용자 지역 정보:', userData.region);
             console.log('사용자 포인트:', userPoints);
+            
+            // region이 없으면 기본값으로 설정하고 Firestore에 저장
+            const finalRegion = userData.region || DEFAULT_REGION;
+            const finalLocation = userData.location || DEFAULT_LOCATION;
+            
+            // region이 없으면 Firestore에 기본값 저장
+            if (!userData.region) {
+              (async () => {
+                try {
+                  const normalizedPhone = firebaseUser.phoneNumber?.replace(/[-\s]/g, '') || '';
+                  await firebaseFirestoreService.createOrUpdateUser({
+                    id: firebaseUser.uid,
+                    phoneNumber: normalizedPhone,
+                    name: userData.name,
+                    avatar: userData.avatar,
+                    gender: userData.gender,
+                    age: userData.age,
+                    latitude: finalLocation.latitude,
+                    longitude: finalLocation.longitude,
+                    region: finalRegion,
+                    isAdmin: userData.isAdmin || false,
+                    points: userPoints !== undefined ? userPoints : 1000,
+                  });
+                  console.log('기본 지역 정보 Firestore 저장 성공:', finalRegion);
+                } catch (error) {
+                  console.error('기본 지역 정보 Firestore 저장 실패:', error);
+                }
+              })();
+            }
             
             // 사용자 정보 업데이트
             setCurrentUser({
@@ -233,7 +247,8 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
               avatar: userData.avatar,
               gender: userData.gender,
               age: userData.age,
-              location: userData.location || DEFAULT_LOCATION, // 위치 정보가 없으면 기본값 사용
+              location: finalLocation,
+              region: finalRegion,
               isAdmin: userData.isAdmin || false,
               bdsmPreference: userData.bdsmPreference,
               bio: userData.bio,
@@ -805,45 +820,47 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     }));
   }, [points, currentUser]);
 
-  const updateLocation = useCallback(async (location: Location) => {
+  const updateRegion = useCallback(async (region: Region) => {
     const firebaseUser = auth.currentUser;
     if (!firebaseUser) {
       console.error('로그인이 필요합니다.');
-      return;
+      throw new Error('로그인이 필요합니다.');
     }
 
-    // 로컬 상태 업데이트 및 Firestore에 위치 정보 저장
-    setCurrentUser((prev) => {
-      const updated = {
+    console.log('updateRegion 호출:', region);
+
+    // 지역에 해당하는 좌표 가져오기
+    const location = getLocationFromRegion(region);
+
+    try {
+      // Firestore에 지역 정보 저장
+      const normalizedPhone = firebaseUser.phoneNumber?.replace(/[-\s]/g, '') || '';
+      await firebaseFirestoreService.createOrUpdateUser({
+        id: firebaseUser.uid,
+        phoneNumber: normalizedPhone,
+        name: currentUser.name,
+        avatar: currentUser.avatar,
+        gender: currentUser.gender,
+        age: currentUser.age,
+        latitude: location.latitude,
+        longitude: location.longitude,
+        region: region,
+        isAdmin: currentUser.isAdmin,
+        points: points,
+      });
+      console.log('지역 정보 Firestore 저장 성공:', region);
+
+      // Firestore 저장 성공 후 로컬 상태 업데이트
+      setCurrentUser((prev) => ({
         ...prev,
+        region,
         location,
-      };
-
-      // Firestore에 위치 정보 저장 (비동기)
-      (async () => {
-        try {
-          const normalizedPhone = firebaseUser.phoneNumber?.replace(/[-\s]/g, '') || '';
-          await firebaseFirestoreService.createOrUpdateUser({
-            id: firebaseUser.uid,
-            phoneNumber: normalizedPhone,
-            name: updated.name,
-            avatar: updated.avatar,
-            gender: updated.gender,
-            age: updated.age,
-            latitude: location.latitude,
-            longitude: location.longitude,
-            isAdmin: updated.isAdmin,
-            points: points,
-          });
-          console.log('위치 정보 Firestore 저장 성공');
-        } catch (error) {
-          console.error('위치 정보 Firestore 저장 실패:', error);
-        }
-      })();
-
-      return updated;
-    });
-  }, [points]);
+      }));
+    } catch (error) {
+      console.error('지역 정보 Firestore 저장 실패:', error);
+      throw error;
+    }
+  }, [points, currentUser]);
 
   // 두 사용자 간의 거리 계산 (Haversine formula)
   const getDistance = useCallback((user1: User, user2: User): number | null => {
@@ -1053,7 +1070,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       deductPoints,
       addPoints,
       updateProfile,
-      updateLocation,
+      updateRegion,
       getDistance,
       formatDistance,
       blockUser,
@@ -1065,7 +1082,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       deleteUser,
       updateReportStatus,
     }),
-    [currentUser, contacts, chatRooms, messages, points, posts, blockedUsers, reports, createOrOpenChat, sendMessage, getMessages, getChatPartner, markAsRead, createPost, startChatFromPost, deductPoints, addPoints, updateProfile, updateLocation, getDistance, formatDistance, blockUser, unblockUser, isBlocked, reportPost, reportUser, deletePost, deleteUser, updateReportStatus]
+    [currentUser, contacts, chatRooms, messages, points, posts, blockedUsers, reports, createOrOpenChat, sendMessage, getMessages, getChatPartner, markAsRead, createPost, startChatFromPost, deductPoints, addPoints, updateProfile, updateRegion, getDistance, formatDistance, blockUser, unblockUser, isBlocked, reportPost, reportUser, deletePost, deleteUser, updateReportStatus]
   );
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;

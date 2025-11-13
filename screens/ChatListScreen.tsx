@@ -40,7 +40,7 @@ const formatTime = (timestamp?: number): string => {
 
 export default function ChatListScreen() {
   const navigation = useNavigation<NavigationProp>();
-  const { currentUser, chatRooms, getChatPartner, getDistance, formatDistance } = useChat();
+  const { currentUser, chatRooms, getChatPartner } = useChat();
   const [swipedRoomId, setSwipedRoomId] = useState<string | null>(null);
 
   const sortedRooms = useMemo(() => {
@@ -83,8 +83,6 @@ export default function ChatListScreen() {
     if (!partner) return null;
 
     const initial = partner.name.charAt(0).toUpperCase();
-    const distance = getDistance(currentUser, partner);
-    const distanceText = formatDistance(distance);
     const translateX = useRef(new Animated.Value(0)).current;
 
     const panResponder = useRef(
@@ -192,9 +190,6 @@ export default function ChatListScreen() {
               <View style={styles.roomHeader}>
                 <View style={styles.nameRow}>
                   <Text style={styles.partnerName}>{partner.name}</Text>
-                  {distance !== null && distanceText !== '위치 정보 없음' && (
-                    <Text style={styles.distanceBadge}>{distanceText}</Text>
-                  )}
                 </View>
                 <Text style={styles.timestamp}>{formatTime(item.lastMessage?.timestamp)}</Text>
               </View>
@@ -211,7 +206,7 @@ export default function ChatListScreen() {
         </Animated.View>
       </View>
     );
-  }, [getChatPartner, navigation, currentUser, getDistance, formatDistance, swipedRoomId, handleDeleteRoom]);
+  }, [getChatPartner, navigation, currentUser, swipedRoomId, handleDeleteRoom]);
 
   const renderRoom = useCallback(({ item }: { item: ChatRoom }) => {
     return <SwipeableRoom item={item} />;
@@ -351,15 +346,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#111',
     marginRight: 6,
-  },
-  distanceBadge: {
-    fontSize: 11,
-    fontWeight: '500',
-    color: '#4C6EF5',
-    backgroundColor: '#E8EDFF',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 8,
   },
   timestamp: {
     fontSize: 12,

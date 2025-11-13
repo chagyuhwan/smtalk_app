@@ -2,6 +2,25 @@ export type Gender = 'male' | 'female';
 
 export type BDSMPreference = 'dominant' | 'submissive' | 'switch' | 'none';
 
+export type Region = 
+  | 'seoul'           // 서울
+  | 'busan'           // 부산
+  | 'daegu'           // 대구
+  | 'incheon'         // 인천
+  | 'gwangju'         // 광주
+  | 'daejeon'         // 대전
+  | 'ulsan'           // 울산
+  | 'sejong'          // 세종
+  | 'gyeonggi'        // 경기도
+  | 'gangwon'         // 강원도
+  | 'chungbuk'        // 충청북도
+  | 'chungnam'        // 충청남도
+  | 'jeonbuk'         // 전라북도
+  | 'jeonnam'         // 전라남도
+  | 'gyeongbuk'       // 경상북도
+  | 'gyeongnam'       // 경상남도
+  | 'jeju';           // 제주도
+
 export interface Location {
   latitude: number;
   longitude: number;
@@ -14,6 +33,7 @@ export interface User {
   gender?: Gender;
   age?: number;
   location?: Location;
+  region?: Region; // 지역 정보
   isAdmin?: boolean; // 관리자 여부
   bdsmPreference?: BDSMPreference; // BDSM 성향
   bio?: string; // 자기소개

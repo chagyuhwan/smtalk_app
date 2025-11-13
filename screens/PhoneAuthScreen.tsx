@@ -11,15 +11,19 @@ import {
   ActivityIndicator,
   ScrollView,
   Modal,
+  Image,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
 import { firebaseAuthService } from '../services/FirebaseAuthService';
 import { firebaseFirestoreService } from '../services/FirebaseFirestoreService';
+import { firebaseStorageService } from '../services/FirebaseStorageService';
 import { auth } from '../config/firebase';
 import { FirebaseRecaptchaVerifierModal } from 'expo-firebase-recaptcha';
 import app from '../config/firebase';
-import { BDSMPreference } from '../types';
+import { BDSMPreference, Region } from '../types';
+import { REGION_NAMES, REGION_LIST, getLocationFromRegion } from '../utils/regions';
 
 type PhoneAuthScreenNavigationProp = NativeStackNavigationProp<
   RootStackParamList,
@@ -43,7 +47,11 @@ export default function PhoneAuthScreen({ navigation }: Props) {
   const [age, setAge] = useState('');
   const [bdsmPreference, setBdsmPreference] = useState<BDSMPreference | undefined>(undefined);
   const [bio, setBio] = useState('');
+  const [avatarUri, setAvatarUri] = useState<string | undefined>(undefined);
+  const [region, setRegion] = useState<Region | undefined>(undefined);
+  const [userId, setUserId] = useState<string>('');
   const [showBdsmDropdown, setShowBdsmDropdown] = useState(false);
+  const [showRegionDropdown, setShowRegionDropdown] = useState(false);
   const codeInputRef = useRef<TextInput>(null);
   const nameInputRef = useRef<TextInput>(null);
   const recaptchaVerifierRef = useRef<FirebaseRecaptchaVerifierModal>(null);
@@ -54,6 +62,43 @@ export default function PhoneAuthScreen({ navigation }: Props) {
     switch: '스위치',
     none: '없음',
   };
+
+  const AVATAR_COLORS = ['#FF6B6B', '#4ECDC4', '#A29BFE', '#FFD93D', '#6C5CE7', '#4C6EF5'];
+
+  // 이미지 선택
+  const pickImage = useCallback(async () => {
+    // 권한 요청
+    if (Platform.OS !== 'web') {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('알림', '사진 접근 권한이 필요합니다.');
+        return;
+      }
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.8,
+    });
+
+    if (!result.canceled && result.assets[0]) {
+      setAvatarUri(result.assets[0].uri);
+    }
+  }, []);
+
+  // 이미지 제거
+  const removeImage = useCallback(() => {
+    Alert.alert('프로필 사진 삭제', '프로필 사진을 삭제하시겠습니까?', [
+      { text: '취소', style: 'cancel' },
+      {
+        text: '삭제',
+        style: 'destructive',
+        onPress: () => setAvatarUri(undefined),
+      },
+    ]);
+  }, []);
 
   // 카운트다운 타이머
   useEffect(() => {
@@ -115,22 +160,41 @@ export default function PhoneAuthScreen({ navigation }: Props) {
 
     setLoading(true);
     try {
+      console.log('인증 코드 검증 시작, 코드:', code);
       const verifyResponse = await firebaseAuthService.verifyCode(code);
+      console.log('인증 코드 검증 응답:', {
+        success: verifyResponse.success,
+        verified: verifyResponse.verified,
+        hasUser: !!verifyResponse.user,
+        message: verifyResponse.message,
+      });
 
       if (verifyResponse.success && verifyResponse.verified && verifyResponse.user) {
         // 인증 성공 후 무조건 회원가입 화면으로 이동
-        // 닉네임, 성별, 나이를 입력받음
+        console.log('인증 성공, 회원가입 화면으로 이동');
+        console.log('사용자 UID:', verifyResponse.user.uid);
+        setUserId(verifyResponse.user.uid);
         setStep('signup');
-        nameInputRef.current?.focus();
+        // 키보드 포커스는 약간의 지연 후 설정
+        setTimeout(() => {
+          nameInputRef.current?.focus();
+        }, 100);
       } else {
-        Alert.alert('오류', verifyResponse.message);
+        console.error('인증 실패:', verifyResponse);
+        Alert.alert('오류', verifyResponse.message || '인증에 실패했습니다.');
       }
     } catch (error: any) {
-      Alert.alert('오류', error.message || '인증 코드 검증에 실패했습니다.');
+      console.error('인증 코드 검증 예외:', error);
+      console.error('에러 상세:', {
+        message: error?.message,
+        code: error?.code,
+        stack: error?.stack,
+      });
+      Alert.alert('오류', error?.message || '인증 코드 검증에 실패했습니다.');
     } finally {
       setLoading(false);
     }
-  }, [phoneNumber, code, navigation]);
+  }, [code]);
 
   // 회원가입 완료 (또는 정보 업데이트)
   const handleSignup = useCallback(async () => {
@@ -160,6 +224,11 @@ export default function PhoneAuthScreen({ navigation }: Props) {
       return;
     }
 
+    if (!region) {
+      Alert.alert('알림', '지역을 선택해주세요.');
+      return;
+    }
+
     if (!bio || bio.trim().length < 2) {
       Alert.alert('알림', '자기소개는 2자 이상 입력해주세요.');
       return;
@@ -176,11 +245,20 @@ export default function PhoneAuthScreen({ navigation }: Props) {
       const normalizedPhone = phoneNumber.replace(/[-\s]/g, '');
       const userId = currentUser.uid;
 
-      // 현재 사용자의 위치 정보 가져오기 (기본값: 서울)
-      const defaultLocation = {
-        latitude: 37.5665,
-        longitude: 126.9780,
-      };
+      // 지역에 해당하는 좌표 가져오기
+      const location = getLocationFromRegion(region);
+
+      // 이미지 업로드 (선택사항)
+      let avatarUrl: string | undefined = undefined;
+      if (avatarUri) {
+        try {
+          avatarUrl = await firebaseStorageService.uploadUserAvatar(userId, avatarUri);
+          console.log('프로필 이미지 업로드 성공:', avatarUrl);
+        } catch (error) {
+          console.error('프로필 이미지 업로드 실패:', error);
+          Alert.alert('알림', '프로필 이미지 업로드에 실패했습니다. 계속 진행합니다.');
+        }
+      }
 
       // 기존 사용자인지 확인 (포인트 유지를 위해)
       let existingUser = null;
@@ -196,10 +274,12 @@ export default function PhoneAuthScreen({ navigation }: Props) {
         id: string;
         phoneNumber: string;
         name: string;
+        avatar?: string;
         gender?: 'male' | 'female';
         age?: number;
         latitude: number;
         longitude: number;
+        region?: Region;
         isAdmin: boolean;
         points?: number;
         bdsmPreference?: BDSMPreference;
@@ -208,10 +288,12 @@ export default function PhoneAuthScreen({ navigation }: Props) {
         id: userId,
         phoneNumber: normalizedPhone,
         name: name.trim(),
+        avatar: avatarUrl,
         gender,
         age: parseInt(age.trim(), 10),
-        latitude: defaultLocation.latitude,
-        longitude: defaultLocation.longitude,
+        latitude: location.latitude,
+        longitude: location.longitude,
+        region: region,
         isAdmin: false,
         bdsmPreference,
         bio: bio.trim(),
@@ -233,7 +315,7 @@ export default function PhoneAuthScreen({ navigation }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [phoneNumber, name, gender, age, bdsmPreference, bio, navigation]);
+  }, [phoneNumber, name, gender, age, bdsmPreference, bio, avatarUri, region, navigation]);
 
   // 인증 코드 재발송
   const handleResendCode = useCallback(async () => {
@@ -351,6 +433,34 @@ export default function PhoneAuthScreen({ navigation }: Props) {
             contentContainerStyle={styles.signupFormContent}
             showsVerticalScrollIndicator={false}
           >
+            {/* 프로필 이미지 */}
+            <View style={styles.avatarSection}>
+              <TouchableOpacity onPress={pickImage} activeOpacity={0.8}>
+                <View style={[styles.avatar, { backgroundColor: AVATAR_COLORS[(userId || name).length % AVATAR_COLORS.length] }]}>
+                  {avatarUri ? (
+                    <Image source={{ uri: avatarUri }} style={styles.avatarImage} />
+                  ) : (
+                    <Text style={styles.avatarText}>{name.charAt(0).toUpperCase() || '?'}</Text>
+                  )}
+                  <View style={styles.cameraIcon}>
+                    <Text style={styles.cameraIconText}>📷</Text>
+                  </View>
+                </View>
+              </TouchableOpacity>
+              <View style={styles.avatarActions}>
+                <TouchableOpacity onPress={pickImage} style={styles.avatarActionButton}>
+                  <Text style={styles.avatarActionText}>사진 변경</Text>
+                </TouchableOpacity>
+                {avatarUri && (
+                  <TouchableOpacity onPress={removeImage} style={styles.avatarActionButton}>
+                    <Text style={[styles.avatarActionText, styles.avatarActionTextDanger]}>
+                      삭제
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            </View>
+
             <Text style={styles.label}>닉네임</Text>
             <TextInput
               ref={nameInputRef}
@@ -408,6 +518,17 @@ export default function PhoneAuthScreen({ navigation }: Props) {
               maxLength={3}
             />
 
+            <Text style={styles.label}>지역</Text>
+            <TouchableOpacity
+              style={styles.dropdownButton}
+              onPress={() => setShowRegionDropdown(true)}
+            >
+              <Text style={[styles.dropdownText, !region && styles.dropdownPlaceholder]}>
+                {region ? REGION_NAMES[region] : '선택하세요'}
+              </Text>
+              <Text style={styles.dropdownArrow}>▼</Text>
+            </TouchableOpacity>
+
             <Text style={styles.label}>BDSM 성향</Text>
             <TouchableOpacity
               style={styles.dropdownButton}
@@ -451,6 +572,8 @@ export default function PhoneAuthScreen({ navigation }: Props) {
                 setAge('');
                 setBdsmPreference(undefined);
                 setBio('');
+                setAvatarUri(undefined);
+                setRegion(undefined);
               }}
             >
               <Text style={styles.backText}>인증 코드 다시 입력</Text>
@@ -458,6 +581,48 @@ export default function PhoneAuthScreen({ navigation }: Props) {
           </ScrollView>
         )}
 
+        {/* 지역 선택 모달 */}
+        <Modal
+          visible={showRegionDropdown}
+          transparent={true}
+          animationType="fade"
+          onRequestClose={() => setShowRegionDropdown(false)}
+        >
+          <TouchableOpacity
+            style={styles.modalOverlay}
+            activeOpacity={1}
+            onPress={() => setShowRegionDropdown(false)}
+          >
+            <View style={styles.dropdownModal}>
+              <ScrollView style={{ maxHeight: 400 }}>
+                {REGION_LIST.map((reg) => (
+                  <TouchableOpacity
+                    key={reg}
+                    style={[
+                      styles.dropdownOption,
+                      region === reg && styles.dropdownOptionSelected,
+                    ]}
+                    onPress={() => {
+                      setRegion(reg);
+                      setShowRegionDropdown(false);
+                    }}
+                  >
+                    <Text
+                      style={[
+                        styles.dropdownOptionText,
+                        region === reg && styles.dropdownOptionTextSelected,
+                      ]}
+                    >
+                      {REGION_NAMES[reg]}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+
+        {/* BDSM 성향 선택 모달 */}
         <Modal
           visible={showBdsmDropdown}
           transparent={true}
@@ -674,6 +839,66 @@ const styles = StyleSheet.create({
   dropdownOptionTextSelected: {
     color: '#8A4CEF',
     fontWeight: '600',
+  },
+  avatarSection: {
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  avatar: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
+    overflow: 'hidden',
+  },
+  avatarImage: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+  },
+  avatarText: {
+    color: '#fff',
+    fontSize: 40,
+    fontWeight: '700',
+  },
+  cameraIcon: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    backgroundColor: '#4C6EF5',
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 3,
+    borderColor: '#fff',
+  },
+  cameraIconText: {
+    fontSize: 16,
+  },
+  avatarActions: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  avatarActionButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  avatarActionText: {
+    fontSize: 14,
+    color: '#4C6EF5',
+    fontWeight: '500',
+  },
+  avatarActionTextDanger: {
+    color: '#FF6B6B',
   },
 });
 
