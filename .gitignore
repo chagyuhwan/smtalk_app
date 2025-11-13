@@ -13,10 +13,14 @@ expo-env.d.ts
 .kotlin/
 *.orig.*
 *.jks
+*.keystore
 *.p8
 *.p12
 *.key
 *.mobileprovision
+# Release 키스토어는 절대 Git에 커밋하지 마세요!
+android/app/release.keystore
+android/keystore.properties
 
 # Metro
 .metro-health-check*
@@ -39,3 +43,21 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Firebase config files (민감한 정보 포함 가능)
+GoogleService-Info.plist
+google-services.json
+
+# IDE
+.idea/
+
+# Local properties
+android/local.properties
+ios/Pods/
+ios/*.xcworkspace
+ios/Podfile.lock
+
+# Build files
+android/app/build/
+android/build/
+ios/build/

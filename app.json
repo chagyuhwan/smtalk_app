@@ -6,14 +6,22 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
+    "plugins": [],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "사용자 간 거리 계산을 위해 위치 정보가 필요합니다.",
+        "NSPhotoLibraryUsageDescription": "게시글에 사진을 추가하기 위해 갤러리 접근 권한이 필요합니다.",
+        "NSPhotoLibraryAddUsageDescription": "게시글에 사진을 추가하기 위해 갤러리 접근 권한이 필요합니다.",
+        "NSCameraUsageDescription": "게시글에 사진을 추가하기 위해 카메라 접근 권한이 필요합니다."
+      },
+      "bundleIdentifier": "com.kanc.randomchat",
+      "googleServicesFile": "./GoogleService-Info.plist"
     },
     "android": {
       "adaptiveIcon": {
@@ -21,7 +29,20 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ],
+      "package": "com.kanc.randomchat"
     },
     "web": {
       "favicon": "./assets/favicon.png"
