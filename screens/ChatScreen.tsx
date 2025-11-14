@@ -314,6 +314,16 @@ export default function ChatScreen() {
     }
   }, [isUserBlocked, navigation]);
 
+  const renderWarningHeader = useCallback(() => {
+    return (
+      <View style={styles.warningContainer}>
+        <Text style={styles.warningText}>
+          성매매는 범죄입니다. 성매매를 하거나 알선, 권유, 유인, 강요하는 사람 또는 성매매 목적의 인신매매를 한 사람 또는 집단은 형사처벌을 받게 되며, 이를 신고하여 기소된 경우 포상금을 받을 수 있습니다.
+        </Text>
+      </View>
+    );
+  }, []);
+
   return (
     <KeyboardAvoidingView
       style={styles.container}
@@ -326,6 +336,7 @@ export default function ChatScreen() {
         keyExtractor={keyExtractor}
         renderItem={renderMessage}
         contentContainerStyle={styles.messageList}
+        ListHeaderComponent={renderWarningHeader}
         ListEmptyComponent={
           <View style={styles.emptyState}>
             <Text style={styles.emptyTitle}>{partner.name}님과의 첫 대화를 시작해보세요!</Text>
@@ -479,5 +490,21 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontSize: 16,
     color: '#667085',
+  },
+  warningContainer: {
+    backgroundColor: '#FFF4E6',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    marginBottom: 16,
+    borderRadius: 8,
+    borderLeftWidth: 4,
+    borderLeftColor: '#FF9800',
+  },
+  warningText: {
+    fontSize: 12,
+    color: '#E65100',
+    lineHeight: 18,
+    textAlign: 'center',
+    fontWeight: '500',
   },
 });

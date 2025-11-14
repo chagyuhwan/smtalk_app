@@ -40,6 +40,8 @@ export interface User {
   deletionRequestedAt?: number; // 탈퇴 요청일 (타임스탬프)
   deletionScheduledAt?: number; // 탈퇴 예정일 (타임스탬프, 요청일 + 30일)
   lastAttendanceDate?: string; // 마지막 출석체크 날짜 (YYYY-MM-DD 형식)
+  suspendedUntil?: number; // 정지 해제일 (타임스탬프)
+  suspensionType?: '1day' | '7days' | 'permanent'; // 정지 타입
 }
 
 export interface Message {

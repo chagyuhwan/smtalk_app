@@ -251,6 +251,58 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
               })();
             }
             
+            // 정지 상태 체크
+            if (userData.suspendedUntil) {
+              const now = Date.now();
+              const suspendedUntil = userData.suspendedUntil;
+              
+              if (suspendedUntil > now) {
+                // 아직 정지 기간이 남아있음
+                const daysRemaining = Math.ceil((suspendedUntil - now) / (24 * 60 * 60 * 1000));
+                const suspensionTypeName = userData.suspensionType === '1day' ? '1일' : 
+                                          userData.suspensionType === '7days' ? '7일' : '영구';
+                
+                console.log('정지된 사용자:', suspensionTypeName, '정지, 남은 기간:', daysRemaining, '일');
+                
+                // 정지 메시지 표시
+                if (userData.suspensionType === 'permanent') {
+                  Alert.alert(
+                    '계정 정지',
+                    '귀하의 계정이 영구 정지되었습니다.\n서비스 이용이 제한됩니다.',
+                    [
+                      {
+                        text: '확인',
+                        onPress: () => {
+                          firebaseAuthService.signOut();
+                        },
+                      },
+                    ]
+                  );
+                  firebaseAuthService.signOut();
+                  return;
+                } else {
+                  Alert.alert(
+                    '계정 정지',
+                    `귀하의 계정이 ${suspensionTypeName} 정지되었습니다.\n정지 해제까지 약 ${daysRemaining}일 남았습니다.\n\n서비스 이용이 제한됩니다.`,
+                    [
+                      {
+                        text: '확인',
+                        onPress: () => {
+                          firebaseAuthService.signOut();
+                        },
+                      },
+                    ]
+                  );
+                  firebaseAuthService.signOut();
+                  return;
+                }
+              } else {
+                // 정지 기간이 지났으면 정지 해제 (자동으로 필드가 null이 되도록)
+                console.log('정지 기간이 지나서 정지 해제');
+                // 정지 해제는 백엔드에서 처리하거나, 여기서 처리할 수 있음
+              }
+            }
+            
             // 탈퇴 예정 사용자 체크
             if (userData.deletionRequestedAt) {
               const deletionScheduledAt = userData.deletionScheduledAt || userData.deletionRequestedAt + 30 * 24 * 60 * 60 * 1000;
@@ -286,6 +338,8 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
               deletionRequestedAt: userData.deletionRequestedAt,
               deletionScheduledAt: userData.deletionScheduledAt,
               lastAttendanceDate: userData.lastAttendanceDate,
+              suspendedUntil: userData.suspendedUntil,
+              suspensionType: userData.suspensionType,
             });
             
             // 포인트 정보도 Firestore에서 가져온 값으로 업데이트
@@ -338,6 +392,12 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     if (!firebaseUser) {
       console.error('로그인이 필요합니다.');
       throw new Error('로그인이 필요합니다.');
+    }
+
+    // 운영자 계정과는 채팅할 수 없음
+    if (user.isAdmin) {
+      Alert.alert('알림', '운영자 계정과는 채팅할 수 없습니다.');
+      throw new Error('운영자 계정과는 채팅할 수 없습니다.');
     }
 
     // 한 번의 순회로 기존 방 찾기 (O(n))
@@ -407,6 +467,23 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       return;
     }
 
+    // 정지 상태 확인
+    if (currentUser.suspendedUntil) {
+      const now = Date.now();
+      if (currentUser.suspendedUntil > now) {
+        const daysRemaining = Math.ceil((currentUser.suspendedUntil - now) / (24 * 60 * 60 * 1000));
+        const suspensionTypeName = currentUser.suspensionType === '1day' ? '1일' : 
+                                  currentUser.suspensionType === '7days' ? '7일' : '영구';
+        
+        if (currentUser.suspensionType === 'permanent') {
+          Alert.alert('계정 정지', '귀하의 계정이 영구 정지되었습니다.\n메시지 전송이 불가능합니다.');
+        } else {
+          Alert.alert('계정 정지', `귀하의 계정이 ${suspensionTypeName} 정지되었습니다.\n정지 해제까지 약 ${daysRemaining}일 남았습니다.\n\n메시지 전송이 불가능합니다.`);
+        }
+        return;
+      }
+    }
+
     const targetRoomIndex = chatRooms.findIndex((room) => room.id === chatRoomId);
     if (targetRoomIndex === -1) {
       console.error('채팅방을 찾을 수 없습니다:', chatRoomId);
@@ -422,6 +499,24 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       console.error('상대방 정보를 찾을 수 없습니다.');
       Alert.alert('오류', '상대방 정보를 찾을 수 없습니다.');
       return;
+    }
+
+    // 상대방이 운영자인지 확인 (Firestore에서 직접 확인)
+    try {
+      const partner = await firebaseFirestoreService.getUser(partnerId);
+      if (partner?.isAdmin) {
+        Alert.alert('알림', '운영자 계정에게는 메시지를 보낼 수 없습니다.');
+        return;
+      }
+    } catch (error) {
+      console.error('상대방 정보 조회 실패:', error);
+      // 조회 실패 시에도 안전을 위해 차단하지 않음 (기존 로직 유지)
+      const partner = targetRoom.participantsInfo?.find(p => p.id === partnerId) || 
+                      contacts.find(c => c.id === partnerId);
+      if (partner?.isAdmin) {
+        Alert.alert('알림', '운영자 계정에게는 메시지를 보낼 수 없습니다.');
+        return;
+      }
     }
 
     // 채팅방이 Firestore에 존재하는지 확인하고 없으면 생성
@@ -660,6 +755,23 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       throw new Error('사용자 정보를 불러오는 중입니다. 잠시 후 다시 시도해주세요.');
     }
 
+    // 정지 상태 확인
+    if (currentUser.suspendedUntil) {
+      const now = Date.now();
+      if (currentUser.suspendedUntil > now) {
+        const daysRemaining = Math.ceil((currentUser.suspendedUntil - now) / (24 * 60 * 60 * 1000));
+        const suspensionTypeName = currentUser.suspensionType === '1day' ? '1일' : 
+                                  currentUser.suspensionType === '7days' ? '7일' : '영구';
+        
+        if (currentUser.suspensionType === 'permanent') {
+          Alert.alert('계정 정지', '귀하의 계정이 영구 정지되었습니다.\n게시글 작성이 불가능합니다.');
+        } else {
+          Alert.alert('계정 정지', `귀하의 계정이 ${suspensionTypeName} 정지되었습니다.\n정지 해제까지 약 ${daysRemaining}일 남았습니다.\n\n게시글 작성이 불가능합니다.`);
+        }
+        throw new Error('정지된 계정은 게시글을 작성할 수 없습니다.');
+      }
+    }
+
     try {
       const postId = `post_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
       let imageUrls: string[] = [];
@@ -738,13 +850,6 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     const success = await deductPoints(50);
     if (!success) return null;
 
-    // 조회수 증가
-    setPosts((prev) =>
-      prev.map((p) =>
-        p.id === postId ? { ...p, viewCount: p.viewCount + 1 } : p
-      )
-    );
-
     // 작성자와 채팅 시작 (연락처에서 찾거나 새로 생성)
     let author = contacts.find((c) => c.id === post.authorId);
     if (!author) {
@@ -752,6 +857,12 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
         id: post.authorId,
         name: post.authorName,
       };
+    }
+
+    // 운영자 계정과는 채팅할 수 없음
+    if (author.isAdmin) {
+      Alert.alert('알림', '운영자 계정과는 채팅할 수 없습니다.');
+      return null;
     }
 
     try {

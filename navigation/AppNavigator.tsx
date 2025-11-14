@@ -10,6 +10,7 @@ import MoreScreen from '../screens/MoreScreen';
 import ProfileSettingsScreen from '../screens/ProfileSettingsScreen';
 import ChargeScreen from '../screens/ChargeScreen';
 import BlockedUsersScreen from '../screens/BlockedUsersScreen';
+import CustomerServiceScreen from '../screens/CustomerServiceScreen';
 import PhoneAuthScreen from '../screens/PhoneAuthScreen';
 import { RootStackParamList, MainTabParamList } from './types';
 import { Text, View, StyleSheet, ActivityIndicator } from 'react-native';
@@ -203,6 +204,14 @@ export default function AppNavigator() {
           component={BlockedUsersScreen}
           options={{
             title: '차단한 회원',
+            headerShown: false,
+          }}
+        />
+        <Stack.Screen
+          name="CustomerService"
+          component={CustomerServiceScreen}
+          options={{
+            title: '고객센터',
             headerShown: false,
           }}
         />

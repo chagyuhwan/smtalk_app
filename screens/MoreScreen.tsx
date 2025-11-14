@@ -194,7 +194,10 @@ export default function MoreScreen() {
         {/* 관리자 페이지는 Spring 웹 애플리케이션으로 분리됨 */}
         {/* 웹 브라우저에서 접속: http://your-server:8080/admin */}
         <View style={styles.section}>
-          <TouchableOpacity style={styles.menuItem}>
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => navigation.navigate('CustomerService')}
+          >
             <Text style={styles.menuText}>고객센터</Text>
             <Text style={styles.menuArrow}>›</Text>
           </TouchableOpacity>

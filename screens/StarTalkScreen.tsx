@@ -611,9 +611,6 @@ export default function StarTalkScreen() {
         <View style={styles.contentRow}>
           <Text style={styles.postContent}>{item.content}</Text>
         </View>
-        <View style={styles.postFooter}>
-          <Text style={styles.viewCount}>조회 {item.viewCount}</Text>
-        </View>
       </TouchableOpacity>
     );
   }, [currentUser, contacts, formatTime, handleChatFromPost]);
@@ -1258,14 +1255,6 @@ const styles = StyleSheet.create({
   postImage: {
     width: '100%',
     height: '100%',
-  },
-  postFooter: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-  },
-  viewCount: {
-    fontSize: 12,
-    color: '#888',
   },
   emptyState: {
     paddingVertical: 60,

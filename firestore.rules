@@ -19,6 +19,7 @@ service cloud.firestore {
       allow read: if request.auth != null;
       
       // 인증된 사용자는 게시글을 작성할 수 있음
+      // 정지 상태 확인은 클라이언트에서 처리 (서버 규칙은 기본 검증만 수행)
       allow create: if request.auth != null && 
         request.resource.data.authorId == request.auth.uid;
       
@@ -59,13 +60,24 @@ service cloud.firestore {
           request.auth.uid in get(/databases/$(database)/documents/chatRooms/$(roomId)).data.participants;
         
         // 메시지 작성: 채팅방 참가자만 작성 가능
+        // 단, 일반 사용자가 운영자 계정에게 메시지를 보내는 것은 차단 (운영자가 사용자에게 보내는 것은 허용)
+        // 정지 상태 확인은 클라이언트에서 처리 (서버 규칙은 기본 검증만 수행)
         allow create: if request.auth != null && 
           exists(/databases/$(database)/documents/chatRooms/$(roomId)) &&
           request.auth.uid in get(/databases/$(database)/documents/chatRooms/$(roomId)).data.participants &&
           request.resource.data.senderId == request.auth.uid &&
           request.resource.data.receiverId != null &&
           request.resource.data.receiverId != request.auth.uid &&
-          request.resource.data.text != null;
+          request.resource.data.text != null &&
+          (
+            // 발신자가 운영자인 경우 항상 허용
+            (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true) ||
+            // 발신자가 운영자가 아닌 경우, 수신자가 운영자가 아니어야 함
+            (!exists(/databases/$(database)/documents/users/$(request.resource.data.receiverId)) ||
+             (exists(/databases/$(database)/documents/users/$(request.resource.data.receiverId)) &&
+              get(/databases/$(database)/documents/users/$(request.resource.data.receiverId)).data.isAdmin != true))
+          );
         
         // 발신자 또는 수신자만 자신의 메시지를 수정할 수 있음 (읽음 상태 업데이트 등)
         allow update: if request.auth != null && 
@@ -109,6 +121,29 @@ service cloud.firestore {
       
       // 관리자는 모든 구매 이력을 읽을 수 있음
       allow read: if request.auth != null && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+    }
+    
+    // ==================== 문의 (inquiries) ====================
+    match /inquiries/{inquiryId} {
+      // 인증된 사용자는 문의를 작성할 수 있음
+      allow create: if request.auth != null && 
+        request.resource.data.userId == request.auth.uid;
+      
+      // 자신의 문의만 읽을 수 있음
+      allow read: if request.auth != null && 
+        resource.data.userId == request.auth.uid;
+      
+      // 관리자는 모든 문의를 읽을 수 있음
+      allow read: if request.auth != null && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+      
+      // 관리자만 문의 상태를 업데이트할 수 있음 (답변 등)
+      allow update: if request.auth != null && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+      
+      // 관리자만 문의를 삭제할 수 있음
+      allow delete: if request.auth != null && 
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
     }
   }

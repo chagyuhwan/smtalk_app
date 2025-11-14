@@ -10,6 +10,7 @@ export type RootStackParamList = {
   ProfileSettings: undefined;
   Charge: undefined;
   BlockedUsers: undefined;
+  CustomerService: undefined;
 };
 
 export type MainTabParamList = {

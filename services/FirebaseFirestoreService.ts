@@ -23,6 +23,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import { User, Post, Report, ChatRoom, Message, Purchase, Region } from '../types';
+import { firebaseStorageService } from './FirebaseStorageService';
 
 class FirebaseFirestoreService {
   // 컬렉션 이름
@@ -33,6 +34,7 @@ class FirebaseFirestoreService {
     CHAT_ROOMS: 'chatRooms',
     MESSAGES: 'messages',
     PURCHASES: 'purchases',
+    INQUIRIES: 'inquiries',
   };
 
   // ==================== 사용자 관리 ====================
@@ -62,6 +64,10 @@ class FirebaseFirestoreService {
     try {
       const userRef = doc(db, this.COLLECTIONS.USERS, userData.id);
       
+      // 기존 문서 존재 여부 확인
+      const userDoc = await getDoc(userRef);
+      const isNewUser = !userDoc.exists();
+      
       // undefined 필드를 제거하여 Firestore 오류 방지
       const cleanedData: any = {
         id: userData.id,
@@ -69,6 +75,11 @@ class FirebaseFirestoreService {
         name: userData.name,
         updatedAt: Timestamp.now(),
       };
+      
+      // 신규 사용자인 경우에만 createdAt 설정
+      if (isNewUser) {
+        cleanedData.createdAt = Timestamp.now();
+      }
       
       // undefined가 아닌 필드만 추가
       if (userData.avatar !== undefined) {
@@ -134,6 +145,19 @@ class FirebaseFirestoreService {
       }
 
       const data = userSnap.data();
+      
+      // suspendedUntil 필드 처리 (Long 또는 Timestamp)
+      let suspendedUntil: number | undefined = undefined;
+      if (data.suspendedUntil) {
+        if (data.suspendedUntil.toMillis) {
+          // Timestamp 타입
+          suspendedUntil = data.suspendedUntil.toMillis();
+        } else if (typeof data.suspendedUntil === 'number') {
+          // Long 타입
+          suspendedUntil = data.suspendedUntil;
+        }
+      }
+      
       return {
         id: userSnap.id,
         name: data.name,
@@ -151,6 +175,8 @@ class FirebaseFirestoreService {
         deletionRequestedAt: data.deletionRequestedAt?.toMillis(),
         deletionScheduledAt: data.deletionScheduledAt?.toMillis(),
         lastAttendanceDate: data.lastAttendanceDate,
+        suspendedUntil: suspendedUntil,
+        suspensionType: data.suspensionType,
       };
     } catch (error) {
       console.error('사용자 조회 오류:', error);
@@ -176,6 +202,19 @@ class FirebaseFirestoreService {
         }
 
         const data = snapshot.data();
+        
+        // suspendedUntil 필드 처리 (Long 또는 Timestamp)
+        let suspendedUntil: number | undefined = undefined;
+        if (data.suspendedUntil) {
+          if (data.suspendedUntil.toMillis) {
+            // Timestamp 타입
+            suspendedUntil = data.suspendedUntil.toMillis();
+          } else if (typeof data.suspendedUntil === 'number') {
+            // Long 타입
+            suspendedUntil = data.suspendedUntil;
+          }
+        }
+        
         const user: User = {
           id: snapshot.id,
           name: data.name,
@@ -192,6 +231,8 @@ class FirebaseFirestoreService {
           deletionRequestedAt: data.deletionRequestedAt?.toMillis(),
           deletionScheduledAt: data.deletionScheduledAt?.toMillis(),
           lastAttendanceDate: data.lastAttendanceDate,
+          suspendedUntil: suspendedUntil,
+          suspensionType: data.suspensionType,
         };
         const points = data.points !== undefined ? data.points : 1000; // 기본값 1000
         const blockedUsers = data.blockedUsers || {}; // 차단된 사용자 목록
@@ -359,7 +400,53 @@ class FirebaseFirestoreService {
   // ==================== 게시글 관리 ====================
 
   /**
+   * 사용자의 게시글 목록 조회 (삭제되지 않은 것만)
+   * 인덱스 없이 작동하도록 authorId로만 필터링하고 메모리에서 정렬
+   */
+  async getUserPosts(authorId: string): Promise<Post[]> {
+    try {
+      // authorId로만 필터링 (인덱스 없이 작동)
+      const q = query(
+        collection(db, this.COLLECTIONS.POSTS),
+        where('authorId', '==', authorId)
+      );
+      const querySnapshot = await getDocs(q);
+      
+      // 메모리에서 isDeleted=false인 게시글만 필터링하고 timestamp로 정렬
+      const posts: Post[] = [];
+      
+      for (const doc of querySnapshot.docs) {
+        const data = doc.data();
+        const isDeleted = data.isDeleted || false;
+        
+        // 삭제되지 않은 게시글만 추가
+        if (!isDeleted) {
+          posts.push({
+            id: doc.id,
+            authorId: data.authorId,
+            authorName: data.authorName,
+            content: data.content,
+            images: data.images || [],
+            timestamp: data.timestamp?.toMillis() || Date.now(),
+            viewCount: data.viewCount || 0,
+          });
+        }
+      }
+      
+      // 오래된 순서대로 정렬
+      posts.sort((a, b) => a.timestamp - b.timestamp);
+      
+      return posts;
+    } catch (error) {
+      console.error('사용자 게시글 조회 오류:', error);
+      throw error;
+    }
+  }
+
+  /**
    * 게시글 생성
+   * 사용자가 게시글을 작성하면, 기존 게시글이 있으면 모두 삭제하고 새 게시글만 유지합니다.
+   * 항상 최신 게시글 1개만 유지됩니다.
    */
   async createPost(postData: {
     id: string;
@@ -369,6 +456,41 @@ class FirebaseFirestoreService {
     images?: string[];
   }): Promise<void> {
     try {
+      // 사용자의 기존 게시글 조회 (삭제되지 않은 것만)
+      const userPosts = await this.getUserPosts(postData.authorId);
+      console.log(`사용자 ${postData.authorId}의 기존 게시글 수: ${userPosts.length}`);
+      
+      // 기존 게시글이 있으면 모두 삭제 (항상 최신 게시글 1개만 유지)
+      if (userPosts.length > 0) {
+        console.log(`기존 게시글 ${userPosts.length}개 삭제 시작`);
+        
+        // 모든 기존 게시글 삭제
+        for (const post of userPosts) {
+          try {
+            await this.deletePost(post.id);
+            console.log('기존 게시글 삭제 완료:', post.id);
+            
+            // 삭제된 게시글의 이미지도 Storage에서 삭제
+            if (post.images && post.images.length > 0) {
+              try {
+                await firebaseStorageService.deleteMultipleImages(post.images);
+                console.log('삭제된 게시글의 이미지 삭제 완료:', post.images.length, '개');
+              } catch (imageError) {
+                console.error('삭제된 게시글의 이미지 삭제 실패:', imageError);
+                // 이미지 삭제 실패해도 게시글 삭제는 계속 진행
+              }
+            }
+          } catch (deleteError) {
+            console.error('게시글 삭제 실패:', post.id, deleteError);
+            // 개별 게시글 삭제 실패해도 다음 게시글 삭제 계속 진행
+          }
+        }
+        
+        console.log(`기존 게시글 ${userPosts.length}개 삭제 완료`);
+      }
+      
+      // 새 게시글 생성
+      console.log('새 게시글 생성 시작:', postData.id);
       const postRef = doc(db, this.COLLECTIONS.POSTS, postData.id);
       await setDoc(postRef, {
         ...postData,
@@ -377,6 +499,7 @@ class FirebaseFirestoreService {
         viewCount: 0,
         isDeleted: false,
       });
+      console.log('새 게시글 생성 완료:', postData.id);
     } catch (error) {
       console.error('게시글 생성 오류:', error);
       throw error;
@@ -490,6 +613,33 @@ class FirebaseFirestoreService {
     }
   }
 
+  // ==================== 문의 관리 ====================
+
+  /**
+   * 문의 생성
+   */
+  async createInquiry(inquiryData: {
+    userId: string;
+    userName: string;
+    content: string;
+  }): Promise<string> {
+    try {
+      const inquiryRef = await addDoc(collection(db, this.COLLECTIONS.INQUIRIES), {
+        userId: inquiryData.userId,
+        userName: inquiryData.userName,
+        content: inquiryData.content,
+        status: 'pending',
+        timestamp: Timestamp.now(),
+        createdAt: Timestamp.now(),
+      });
+      console.log('문의 생성 완료:', inquiryRef.id);
+      return inquiryRef.id;
+    } catch (error) {
+      console.error('문의 생성 오류:', error);
+      throw error;
+    }
+  }
+
   // ==================== 신고 관리 ====================
 
   /**
@@ -503,11 +653,26 @@ class FirebaseFirestoreService {
     description?: string;
   }): Promise<string> {
     try {
-      const reportRef = await addDoc(collection(db, this.COLLECTIONS.REPORTS), {
-        ...reportData,
+      // undefined 값을 제거한 데이터 객체 생성
+      const firestoreData: any = {
+        reportedBy: reportData.reportedBy,
+        reason: reportData.reason,
         status: 'pending',
         timestamp: Timestamp.now(),
-      });
+      };
+
+      // 선택적 필드 추가 (undefined가 아닐 때만)
+      if (reportData.postId) {
+        firestoreData.postId = reportData.postId;
+      }
+      if (reportData.userId) {
+        firestoreData.userId = reportData.userId;
+      }
+      if (reportData.description !== undefined && reportData.description !== null && reportData.description !== '') {
+        firestoreData.description = reportData.description;
+      }
+
+      const reportRef = await addDoc(collection(db, this.COLLECTIONS.REPORTS), firestoreData);
       return reportRef.id;
     } catch (error) {
       console.error('신고 생성 오류:', error);
