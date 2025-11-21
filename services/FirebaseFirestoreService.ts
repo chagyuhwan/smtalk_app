@@ -21,11 +21,24 @@ import {
   QuerySnapshot,
   DocumentData,
 } from 'firebase/firestore';
-import { db } from '../config/firebase';
-import { User, Post, Report, ChatRoom, Message, Purchase, Region } from '../types';
+import { db, auth } from '../config/firebase';
+import { User, Post, Report, ChatRoom, Message, Purchase, Region, BDSMPreference } from '../types';
 import { firebaseStorageService } from './FirebaseStorageService';
 
 class FirebaseFirestoreService {
+  // bdsmPreference가 단일 값인 경우 배열로 변환 (기존 데이터 호환성)
+  private normalizeBdsmPreference(pref: any): BDSMPreference[] | undefined {
+    if (!pref) return undefined;
+    if (Array.isArray(pref)) {
+      // 배열인 경우 각 항목이 유효한 BDSMPreference인지 확인
+      return pref.filter((p: any) => typeof p === 'string') as BDSMPreference[];
+    }
+    // 단일 값인 경우 배열로 변환 (기존 'none' 값은 제외)
+    if (typeof pref === 'string' && pref !== 'none') {
+      return [pref as BDSMPreference];
+    }
+    return undefined;
+  }
   // 컬렉션 이름
   private readonly COLLECTIONS = {
     USERS: 'users',
@@ -54,7 +67,7 @@ class FirebaseFirestoreService {
     region?: Region;
     isAdmin?: boolean;
     points?: number;
-    bdsmPreference?: 'dominant' | 'submissive' | 'switch' | 'none';
+    bdsmPreference?: BDSMPreference[];
     bio?: string;
     deletionRequestedAt?: number;
     deletionScheduledAt?: number;
@@ -177,6 +190,8 @@ class FirebaseFirestoreService {
         lastAttendanceDate: data.lastAttendanceDate,
         suspendedUntil: suspendedUntil,
         suspensionType: data.suspensionType,
+        likeCount: data.likeCount || 0,
+        likedBy: data.likedBy || {},
       };
     } catch (error) {
       console.error('사용자 조회 오류:', error);
@@ -226,15 +241,17 @@ class FirebaseFirestoreService {
             : undefined,
           region: data.region,
           isAdmin: data.isAdmin || false,
-          bdsmPreference: data.bdsmPreference,
+          bdsmPreference: this.normalizeBdsmPreference(data.bdsmPreference),
           bio: data.bio,
           deletionRequestedAt: data.deletionRequestedAt?.toMillis(),
           deletionScheduledAt: data.deletionScheduledAt?.toMillis(),
           lastAttendanceDate: data.lastAttendanceDate,
           suspendedUntil: suspendedUntil,
           suspensionType: data.suspensionType,
+          likeCount: data.likeCount || 0,
+          likedBy: data.likedBy || {},
         };
-        const points = data.points !== undefined ? data.points : 1000; // 기본값 1000
+        const points = data.points !== undefined ? data.points : 100; // 기본값 100
         const blockedUsers = data.blockedUsers || {}; // 차단된 사용자 목록
         console.log('사용자 정보 실시간 업데이트:', user.id, user.name, user.location, '지역:', user.region, '포인트:', points, '차단된 사용자:', Object.keys(blockedUsers).length, '명');
         callback(user, points, blockedUsers);
@@ -264,6 +281,7 @@ class FirebaseFirestoreService {
           // 탈퇴 예정 사용자 제외
           const isDeletionScheduled = data.deletionScheduledAt && data.deletionScheduledAt.toMillis() <= Date.now();
           const isDeletionRequested = data.deletionRequestedAt; // 탈퇴 요청된 사용자도 제외
+          const isAdmin = data.isAdmin || false; // 운영자 계정 제외
           
           if (shouldExclude) {
             console.log('사용자 제외:', doc.id);
@@ -271,8 +289,11 @@ class FirebaseFirestoreService {
           if (isDeletionRequested) {
             console.log('탈퇴 예정 사용자 제외:', doc.id);
           }
+          if (isAdmin) {
+            console.log('운영자 계정 제외:', doc.id);
+          }
           
-          return !shouldExclude && !isDeletionRequested && !isDeletionScheduled;
+          return !shouldExclude && !isDeletionRequested && !isDeletionScheduled && !isAdmin;
         })
         .map((doc) => {
           const data = doc.data();
@@ -287,11 +308,12 @@ class FirebaseFirestoreService {
               : undefined,
             region: data.region,
             isAdmin: data.isAdmin || false,
-            bdsmPreference: data.bdsmPreference,
+            bdsmPreference: this.normalizeBdsmPreference(data.bdsmPreference),
             bio: data.bio,
             deletionRequestedAt: data.deletionRequestedAt?.toMillis(),
             deletionScheduledAt: data.deletionScheduledAt?.toMillis(),
             lastAttendanceDate: data.lastAttendanceDate,
+            likeCount: data.likeCount || 0,
           };
           console.log('사용자 매핑:', user.id, user.name);
           return user;
@@ -326,8 +348,9 @@ class FirebaseFirestoreService {
             // 탈퇴 예정 사용자 제외
             const isDeletionScheduled = data.deletionScheduledAt && data.deletionScheduledAt.toMillis() <= Date.now();
             const isDeletionRequested = data.deletionRequestedAt; // 탈퇴 요청된 사용자도 제외
+            const isAdmin = data.isAdmin || false; // 운영자 계정 제외
             
-            return !shouldExclude && !isDeletionRequested && !isDeletionScheduled;
+            return !shouldExclude && !isDeletionRequested && !isDeletionScheduled && !isAdmin;
           })
           .map((doc) => {
             const data = doc.data();
@@ -342,11 +365,12 @@ class FirebaseFirestoreService {
                 : undefined,
               region: data.region,
               isAdmin: data.isAdmin || false,
-              bdsmPreference: data.bdsmPreference,
+              bdsmPreference: this.normalizeBdsmPreference(data.bdsmPreference),
               bio: data.bio,
               deletionRequestedAt: data.deletionRequestedAt?.toMillis(),
               deletionScheduledAt: data.deletionScheduledAt?.toMillis(),
               lastAttendanceDate: data.lastAttendanceDate,
+              likeCount: data.likeCount || 0,
             };
           });
         console.log('사용자 목록 실시간 업데이트:', users.length, '명');
@@ -871,7 +895,7 @@ class FirebaseFirestoreService {
                   age: p1.age,
                   location: p1.location,
                   isAdmin: p1.isAdmin,
-                  bdsmPreference: p1.bdsmPreference,
+                  bdsmPreference: this.normalizeBdsmPreference(p1.bdsmPreference),
                 },
                 {
                   id: p2.id,
@@ -881,7 +905,7 @@ class FirebaseFirestoreService {
                   age: p2.age,
                   location: p2.location,
                   isAdmin: p2.isAdmin,
-                  bdsmPreference: p2.bdsmPreference,
+                  bdsmPreference: this.normalizeBdsmPreference(p2.bdsmPreference),
                 },
               ] as [User, User];
             } catch (error) {
@@ -964,12 +988,15 @@ class FirebaseFirestoreService {
             console.error('마지막 메시지 조회 오류:', error);
           }
           
+          const pinnedBy = data.pinnedBy || {};
+          
           rooms.push({
             id: doc.id,
             participants: participants as [string, string],
             participantsInfo,
             lastMessage,
             unreadCount: 0, // TODO: 읽지 않은 메시지 수 계산
+            pinnedBy: pinnedBy,
           });
         }
         
@@ -987,10 +1014,112 @@ class FirebaseFirestoreService {
    */
   async deleteChatRoom(roomId: string): Promise<void> {
     try {
+      const firebaseUser = auth.currentUser;
+      if (!firebaseUser) {
+        throw new Error('로그인이 필요합니다.');
+      }
+
       const roomRef = doc(db, this.COLLECTIONS.CHAT_ROOMS, roomId);
+      
+      // 채팅방이 존재하는지 확인
+      const roomDoc = await getDoc(roomRef);
+      if (!roomDoc.exists()) {
+        console.warn('채팅방이 이미 삭제되었습니다:', roomId);
+        return; // 이미 삭제된 경우 성공으로 처리
+      }
+
+      const roomData = roomDoc.data();
+      // 참가자인지 확인
+      if (!roomData.participants || !roomData.participants.includes(firebaseUser.uid)) {
+        throw new Error('채팅방 삭제 권한이 없습니다.');
+      }
+
       await deleteDoc(roomRef);
-    } catch (error) {
+    } catch (error: any) {
       console.error('채팅방 삭제 오류:', error);
+      // 이미 삭제된 경우는 성공으로 처리
+      if (error.code === 'permission-denied' || error.code === 'not-found') {
+        console.warn('채팅방이 이미 삭제되었거나 권한이 없습니다:', roomId);
+        return;
+      }
+      throw error;
+    }
+  }
+
+  // ==================== 채팅방 고정 관리 ====================
+
+  /**
+   * 채팅방 고정
+   */
+  async pinChatRoom(roomId: string, userId: string): Promise<void> {
+    try {
+      const roomRef = doc(db, this.COLLECTIONS.CHAT_ROOMS, roomId);
+      const roomDoc = await getDoc(roomRef);
+
+      if (!roomDoc.exists()) {
+        throw new Error('채팅방을 찾을 수 없습니다.');
+      }
+
+      const roomData = roomDoc.data();
+      const pinnedBy = roomData.pinnedBy || {};
+
+      // 이미 고정했는지 확인
+      if (pinnedBy[userId]) {
+        console.log('이미 고정된 채팅방입니다.');
+        return;
+      }
+
+      // 고정 추가
+      const updatedPinnedBy = {
+        ...pinnedBy,
+        [userId]: Date.now(),
+      };
+
+      await updateDoc(roomRef, {
+        pinnedBy: updatedPinnedBy,
+        updatedAt: Timestamp.now(),
+      });
+
+      console.log('채팅방 고정 완료:', roomId);
+    } catch (error) {
+      console.error('채팅방 고정 오류:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 채팅방 고정 해제
+   */
+  async unpinChatRoom(roomId: string, userId: string): Promise<void> {
+    try {
+      const roomRef = doc(db, this.COLLECTIONS.CHAT_ROOMS, roomId);
+      const roomDoc = await getDoc(roomRef);
+
+      if (!roomDoc.exists()) {
+        throw new Error('채팅방을 찾을 수 없습니다.');
+      }
+
+      const roomData = roomDoc.data();
+      const pinnedBy = roomData.pinnedBy || {};
+
+      // 고정하지 않았는지 확인
+      if (!pinnedBy[userId]) {
+        console.log('고정되지 않은 채팅방입니다.');
+        return;
+      }
+
+      // 고정 제거
+      const updatedPinnedBy = { ...pinnedBy };
+      delete updatedPinnedBy[userId];
+
+      await updateDoc(roomRef, {
+        pinnedBy: updatedPinnedBy,
+        updatedAt: Timestamp.now(),
+      });
+
+      console.log('채팅방 고정 해제 완료:', roomId);
+    } catch (error) {
+      console.error('채팅방 고정 해제 오류:', error);
       throw error;
     }
   }
@@ -1114,9 +1243,11 @@ class FirebaseFirestoreService {
               console.warn('수동 생성: Firebase Console → Firestore → 인덱스 → 컬렉션: chatRooms/{roomId}/messages, 필드: timestamp(내림차순)');
             }
           } else if (error.code === 'permission-denied') {
-            console.error('메시지 구독 권한 오류:', error.message);
+            // 권한 오류는 채팅방이 삭제되었거나 접근 권한이 없는 경우
+            // 조용히 처리 (로그만 남기고 에러로 표시하지 않음)
+            console.log('메시지 구독 권한 오류 (채팅방이 삭제되었거나 접근 권한 없음):', chatRoomId);
           } else if (error.code === 'not-found') {
-            console.warn('채팅방이 존재하지 않습니다:', chatRoomId);
+            console.log('채팅방이 존재하지 않습니다:', chatRoomId);
           } else {
             console.error('메시지 구독 오류:', error.code, error.message);
           }
@@ -1296,6 +1427,280 @@ class FirebaseFirestoreService {
       });
     } catch (error) {
       console.error('사용자 구매 이력 조회 오류:', error);
+      throw error;
+    }
+  }
+
+  // ==================== 좋아요 관리 ====================
+
+  /**
+   * 사용자에게 좋아요 추가
+   */
+  async likeUser(likerId: string, likedUserId: string): Promise<void> {
+    try {
+      if (likerId === likedUserId) {
+        throw new Error('자기 자신에게 좋아요를 누를 수 없습니다.');
+      }
+
+      const likedUserRef = doc(db, this.COLLECTIONS.USERS, likedUserId);
+      const likedUserDoc = await getDoc(likedUserRef);
+
+      if (!likedUserDoc.exists()) {
+        throw new Error('좋아요를 누를 사용자를 찾을 수 없습니다.');
+      }
+
+      const likedUserData = likedUserDoc.data();
+      const likedBy = likedUserData.likedBy || {};
+      const currentLikeCount = likedUserData.likeCount || 0;
+
+      // 이미 좋아요를 눌렀는지 확인
+      if (likedBy[likerId]) {
+        console.log('이미 좋아요를 누른 사용자입니다.');
+        return;
+      }
+
+      // 좋아요 추가
+      const updatedLikedBy = {
+        ...likedBy,
+        [likerId]: Date.now(),
+      };
+
+      await updateDoc(likedUserRef, {
+        likedBy: updatedLikedBy,
+        likeCount: currentLikeCount + 1,
+        updatedAt: Timestamp.now(),
+      });
+
+      console.log('좋아요 추가 완료:', likerId, '->', likedUserId);
+    } catch (error) {
+      console.error('좋아요 추가 오류:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 사용자에게 좋아요 제거
+   */
+  async unlikeUser(likerId: string, likedUserId: string): Promise<void> {
+    try {
+      if (likerId === likedUserId) {
+        throw new Error('자기 자신의 좋아요를 취소할 수 없습니다.');
+      }
+
+      const likedUserRef = doc(db, this.COLLECTIONS.USERS, likedUserId);
+      const likedUserDoc = await getDoc(likedUserRef);
+
+      if (!likedUserDoc.exists()) {
+        throw new Error('좋아요를 취소할 사용자를 찾을 수 없습니다.');
+      }
+
+      const likedUserData = likedUserDoc.data();
+      const likedBy = likedUserData.likedBy || {};
+      const currentLikeCount = likedUserData.likeCount || 0;
+
+      // 좋아요를 누르지 않았는지 확인
+      if (!likedBy[likerId]) {
+        console.log('좋아요를 누르지 않은 사용자입니다.');
+        return;
+      }
+
+      // 좋아요 제거
+      const updatedLikedBy = { ...likedBy };
+      delete updatedLikedBy[likerId];
+
+      await updateDoc(likedUserRef, {
+        likedBy: updatedLikedBy,
+        likeCount: Math.max(0, currentLikeCount - 1),
+        updatedAt: Timestamp.now(),
+      });
+
+      console.log('좋아요 제거 완료:', likerId, '->', likedUserId);
+    } catch (error) {
+      console.error('좋아요 제거 오류:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 사용자 좋아요 상태 확인
+   */
+  async getUserLikeStatus(likerId: string, likedUserId: string): Promise<boolean> {
+    try {
+      if (likerId === likedUserId) {
+        return false;
+      }
+
+      const likedUserRef = doc(db, this.COLLECTIONS.USERS, likedUserId);
+      const likedUserDoc = await getDoc(likedUserRef);
+
+      if (!likedUserDoc.exists()) {
+        return false;
+      }
+
+      const likedUserData = likedUserDoc.data();
+      const likedBy = likedUserData.likedBy || {};
+
+      return !!likedBy[likerId];
+    } catch (error) {
+      console.error('좋아요 상태 확인 오류:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 사용자 좋아요 수 조회
+   */
+  async getUserLikeCount(userId: string): Promise<number> {
+    try {
+      const userRef = doc(db, this.COLLECTIONS.USERS, userId);
+      const userDoc = await getDoc(userRef);
+
+      if (!userDoc.exists()) {
+        return 0;
+      }
+
+      const userData = userDoc.data();
+      return userData.likeCount || 0;
+    } catch (error) {
+      console.error('좋아요 수 조회 오류:', error);
+      return 0;
+    }
+  }
+
+  /**
+   * 약관 동의 내역 저장
+   */
+  async setUserAgreement(
+    userId: string,
+    agreement: {
+      termsAgreed: boolean;
+      privacyAgreed: boolean;
+      termsAgreedAt: number;
+      privacyAgreedAt: number;
+    }
+  ): Promise<void> {
+    try {
+      const userRef = doc(db, this.COLLECTIONS.USERS, userId);
+      await updateDoc(userRef, {
+        termsAgreed: agreement.termsAgreed,
+        privacyAgreed: agreement.privacyAgreed,
+        termsAgreedAt: Timestamp.fromMillis(agreement.termsAgreedAt),
+        privacyAgreedAt: Timestamp.fromMillis(agreement.privacyAgreedAt),
+        updatedAt: Timestamp.now(),
+      });
+      console.log('약관 동의 내역 저장 완료:', userId);
+    } catch (error) {
+      console.error('약관 동의 내역 저장 오류:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 알림 설정 저장
+   */
+  async setNotificationSettings(
+    userId: string,
+    settings: {
+      enabled: boolean;
+      messages: boolean;
+      likes: boolean;
+      reports: boolean;
+      updatedAt: number;
+    }
+  ): Promise<void> {
+    try {
+      const userRef = doc(db, this.COLLECTIONS.USERS, userId);
+      await updateDoc(userRef, {
+        notificationSettings: {
+          enabled: settings.enabled,
+          messages: settings.messages,
+          likes: settings.likes,
+          reports: settings.reports,
+          updatedAt: Timestamp.fromMillis(settings.updatedAt),
+        },
+        updatedAt: Timestamp.now(),
+      });
+      console.log('알림 설정 저장 완료:', userId);
+    } catch (error) {
+      console.error('알림 설정 저장 오류:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 알림 설정 조회
+   */
+  async getNotificationSettings(userId: string): Promise<{
+    enabled: boolean;
+    messages: boolean;
+    likes: boolean;
+    reports: boolean;
+    updatedAt: number;
+  } | null> {
+    try {
+      const userRef = doc(db, this.COLLECTIONS.USERS, userId);
+      const userDoc = await getDoc(userRef);
+
+      if (!userDoc.exists()) {
+        return null;
+      }
+
+      const userData = userDoc.data();
+      const settings = userData.notificationSettings;
+
+      if (!settings) {
+        // 기본값 반환
+        return {
+          enabled: true,
+          messages: true,
+          likes: true,
+          reports: true,
+          updatedAt: Date.now(),
+        };
+      }
+
+      return {
+        enabled: settings.enabled ?? true,
+        messages: settings.messages ?? true,
+        likes: settings.likes ?? true,
+        reports: settings.reports ?? true,
+        updatedAt: settings.updatedAt?.toMillis() || Date.now(),
+      };
+    } catch (error) {
+      console.error('알림 설정 조회 오류:', error);
+      // 오류 시 기본값 반환
+      return {
+        enabled: true,
+        messages: true,
+        likes: true,
+        reports: true,
+        updatedAt: Date.now(),
+      };
+    }
+  }
+
+  /**
+   * 푸시 토큰 업데이트
+   * 앱이 완전히 종료된 상태에서도 알림을 받기 위해 필요합니다.
+   */
+  async updatePushToken(userId: string, pushToken: string | null): Promise<void> {
+    try {
+      const userRef = doc(db, this.COLLECTIONS.USERS, userId);
+      const updateData: any = {
+        updatedAt: Timestamp.now(),
+      };
+
+      if (pushToken) {
+        updateData.expoPushToken = pushToken;
+      } else {
+        // null인 경우 필드 삭제
+        updateData.expoPushToken = null;
+      }
+
+      await updateDoc(userRef, updateData);
+      console.log('푸시 토큰 업데이트 완료:', userId, pushToken ? '토큰 저장' : '토큰 제거');
+    } catch (error) {
+      console.error('푸시 토큰 업데이트 오류:', error);
       throw error;
     }
   }

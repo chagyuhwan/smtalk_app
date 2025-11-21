@@ -11,16 +11,28 @@
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
-    "plugins": [],
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#ffffff",
+          "sounds": []
+        }
+      ]
+    ],
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "게시글에 사진을 추가하기 위해 갤러리 접근 권한이 필요합니다.",
         "NSPhotoLibraryAddUsageDescription": "게시글에 사진을 추가하기 위해 갤러리 접근 권한이 필요합니다.",
-        "NSCameraUsageDescription": "게시글에 사진을 추가하기 위해 카메라 접근 권한이 필요합니다."
+        "NSCameraUsageDescription": "게시글에 사진을 추가하기 위해 카메라 접근 권한이 필요합니다.",
+        "NSUserNotificationsUsageDescription": "새로운 메시지를 받기 위해 알림 권한이 필요합니다.",
+        "ITSAppUsesNonExemptEncryption": false
       },
       "bundleIdentifier": "com.kanc.randomchat",
-      "googleServicesFile": "./GoogleService-Info.plist"
+      "googleServicesFile": "./GoogleService-Info.plist",
+      "buildNumber": "1"
     },
     "android": {
       "adaptiveIcon": {
@@ -32,9 +44,12 @@
       "permissions": [
         "CAMERA",
         "READ_EXTERNAL_STORAGE",
-        "WRITE_EXTERNAL_STORAGE"
+        "WRITE_EXTERNAL_STORAGE",
+        "RECEIVE_BOOT_COMPLETED"
       ],
-      "package": "com.kanc.randomchat"
+      "package": "com.kanc.randomchat",
+      "versionCode": 1,
+      "googleServicesFile": "./GoogleService-Info.plist"
     },
     "web": {
       "favicon": "./assets/favicon.png"

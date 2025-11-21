@@ -12,33 +12,83 @@ import {
   Modal,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useChat } from '../context/ChatContext';
 import { RootStackParamList } from '../navigation/types';
 import { Gender, BDSMPreference, Region } from '../types';
 import { REGION_NAMES, REGION_LIST } from '../utils/regions';
+import { performanceMonitor } from '../utils/PerformanceMonitor';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
-const AVATAR_COLORS = ['#FF6B6B', '#4ECDC4', '#A29BFE', '#FFD93D', '#6C5CE7', '#4C6EF5'];
+const AVATAR_COLORS = ['#FF6B6B', '#4ECDC4', '#1F2937', '#FFD93D', '#1F2937', '#1F2937'];
+
+const getAvatarColor = (gender?: Gender, hasAvatar?: boolean) => {
+  // 프로필 사진이 없을 때 성별에 따라 색상 설정
+  if (!hasAvatar && gender) {
+    return gender === 'female' ? '#F3AAC2' : '#8FB5DF'; // 여자는 핑크, 남자는 연한 파란색
+  }
+  // 프로필 사진이 있거나 성별 정보가 없을 때는 기본 색상
+  return AVATAR_COLORS[0];
+};
 
 const BDSM_LABELS: Record<BDSMPreference, string> = {
-  dominant: '지배',
-  submissive: '복종',
+  vanilla: '바닐라',
+  owner: '오너',
+  daddy: '대디',
+  mommy: '마미',
+  dominant: '도미넌트',
+  master: '마스터',
+  mistress: '미스트리스',
+  hunter: '헌터',
+  brattamer: '브랫테이머',
+  degrader: '디그레이더',
+  rigger: '리거',
+  boss: '보스',
   switch: '스위치',
-  none: '없음',
+  sadist: '사디스트',
+  spanker: '스팽커',
+  pet: '펫',
+  little: '리틀',
+  submissive: '서브미시브',
+  slave: '슬레이브',
+  prey: '프레이',
+  brat: '브랫',
+  degradee: '디그레이디',
+  ropebunny: '로프버니',
+  servant: '서번트',
+  masochist: '마조히스트',
+  spankee: '스팽키이거',
 };
 
 export default function ProfileSettingsScreen() {
   const navigation = useNavigation<NavigationProp>();
   const { currentUser, updateProfile, updateRegion } = useChat();
+  
+  // 성능 측정: 화면 포커스 시
+  useFocusEffect(
+    React.useCallback(() => {
+      performanceMonitor.startScreenLoad('ProfileSettingsScreen');
+      return () => {
+        performanceMonitor.endScreenLoad('ProfileSettingsScreen');
+      };
+    }, [])
+  );
+  
   const [name, setName] = useState(currentUser.name);
   const [gender, setGender] = useState<Gender | undefined>(currentUser.gender);
   const [avatarUri, setAvatarUri] = useState<string | undefined>(currentUser.avatar);
   const [age, setAge] = useState<string>(currentUser.age?.toString() || '');
-  const [bdsmPreference, setBdsmPreference] = useState<BDSMPreference | undefined>(
-    currentUser.bdsmPreference
+  // bdsmPreference가 배열이 아닌 경우(기존 데이터) 배열로 변환
+  const normalizeBdsmPreference = useCallback((pref: BDSMPreference | BDSMPreference[] | undefined): BDSMPreference[] => {
+    if (!pref) return [];
+    if (Array.isArray(pref)) return pref;
+    return [pref]; // 단일 값인 경우 배열로 변환
+  }, []);
+
+  const [bdsmPreference, setBdsmPreference] = useState<BDSMPreference[]>(
+    normalizeBdsmPreference(currentUser.bdsmPreference)
   );
   const [bio, setBio] = useState<string>(currentUser.bio || '');
   const [region, setRegion] = useState<Region | undefined>(currentUser.region || 'seoul');
@@ -57,6 +107,14 @@ export default function ProfileSettingsScreen() {
     }
   }, []); // 마운트 시에만 실행
 
+  // currentUser.bdsmPreference가 변경될 때 상태 업데이트 (기존 데이터 호환성)
+  useEffect(() => {
+    const normalized = normalizeBdsmPreference(currentUser.bdsmPreference);
+    if (normalized.length > 0) {
+      setBdsmPreference(normalized);
+    }
+  }, [currentUser.bdsmPreference, normalizeBdsmPreference]);
+
   const handleSave = useCallback(async () => {
     const trimmedName = name.trim();
     if (!trimmedName) {
@@ -67,6 +125,24 @@ export default function ProfileSettingsScreen() {
     if (trimmedName.length > 20) {
       Alert.alert('알림', '이름은 20자 이하로 입력해주세요.');
       return;
+    }
+
+    // 닉네임 필터링
+    const { contentFilterService } = await import('../services/ContentFilterService');
+    const nameFilterResult = contentFilterService.filterNickname(trimmedName);
+    if (!nameFilterResult.passed) {
+      Alert.alert('알림', nameFilterResult.reason || '부적절한 이름입니다.');
+      return;
+    }
+
+    // 자기소개 필터링
+    const trimmedBio = bio.trim();
+    if (trimmedBio) {
+      const bioFilterResult = contentFilterService.filterBio(trimmedBio);
+      if (!bioFilterResult.passed) {
+        Alert.alert('알림', bioFilterResult.reason || '부적절한 내용이 포함되어 있습니다.');
+        return;
+      }
     }
 
     // 성별이 이미 설정되어 있으면 기존 성별 사용, 없으면 새로 선택한 성별 사용
@@ -89,6 +165,17 @@ export default function ProfileSettingsScreen() {
         return;
       }
       finalAge = ageNum;
+    }
+
+    // BDSM 성향 검증
+    if (!bdsmPreference || bdsmPreference.length === 0) {
+      Alert.alert('알림', 'BDSM 성향을 최소 1개 이상 선택해주세요.');
+      return;
+    }
+
+    if (bdsmPreference.length > 3) {
+      Alert.alert('알림', 'BDSM 성향은 최대 3개까지 선택할 수 있습니다.');
+      return;
     }
 
     try {
@@ -150,16 +237,20 @@ export default function ProfileSettingsScreen() {
   }, []);
 
   const initial = name.charAt(0).toUpperCase() || '?';
-  const avatarColor = AVATAR_COLORS[currentUser.id.length % AVATAR_COLORS.length];
+  // 성별은 현재 사용자의 성별 또는 선택한 성별 사용
+  const currentGender = currentUser.gender || gender;
+  const avatarColor = getAvatarColor(currentGender, !!avatarUri);
 
   const getGenderLabel = (g?: Gender) => {
     if (!g) return '';
     return g === 'male' ? '남자' : '여자';
   };
 
-  const getBdsmLabel = (p?: BDSMPreference) => {
-    if (!p) return '';
-    return BDSM_LABELS[p];
+  const getBdsmLabel = (prefs?: BDSMPreference | BDSMPreference[]) => {
+    if (!prefs) return '';
+    const normalized = Array.isArray(prefs) ? prefs : [prefs];
+    if (normalized.length === 0) return '';
+    return normalized.map(p => BDSM_LABELS[p]).join(', ');
   };
 
   // 디버깅: 컴포넌트 렌더링 확인
@@ -342,11 +433,16 @@ export default function ProfileSettingsScreen() {
               style={styles.inlineDropdownButton}
               onPress={() => setShowBdsmDropdown(true)}
             >
-              <Text style={[styles.inlineDropdownText, !bdsmPreference && styles.dropdownPlaceholder]}>
-                {bdsmPreference ? BDSM_LABELS[bdsmPreference] : '선택하세요'}
+              <Text style={[styles.inlineDropdownText, bdsmPreference.length === 0 && styles.dropdownPlaceholder]}>
+                {bdsmPreference.length > 0 ? getBdsmLabel(bdsmPreference) : '선택하세요'}
               </Text>
               <Text style={styles.dropdownArrow}>▼</Text>
             </TouchableOpacity>
+            {bdsmPreference.length > 0 && (
+              <Text style={styles.hintText}>
+                {bdsmPreference.length}/3 선택됨
+              </Text>
+            )}
           </View>
         </View>
 
@@ -362,28 +458,81 @@ export default function ProfileSettingsScreen() {
             onPress={() => setShowBdsmDropdown(false)}
           >
             <View style={styles.dropdownModal}>
-              {(['dominant', 'submissive', 'switch', 'none'] as BDSMPreference[]).map((pref) => (
-                <TouchableOpacity
-                  key={pref}
-                  style={[
-                    styles.dropdownOption,
-                    bdsmPreference === pref && styles.dropdownOptionSelected,
-                  ]}
-                  onPress={() => {
-                    setBdsmPreference(pref);
-                    setShowBdsmDropdown(false);
-                  }}
-                >
-                  <Text
-                    style={[
-                      styles.dropdownOptionText,
-                      bdsmPreference === pref && styles.dropdownOptionTextSelected,
-                    ]}
-                  >
-                    {BDSM_LABELS[pref]}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalHeaderText}>BDSM 성향 선택</Text>
+                <Text style={styles.modalHeaderSubtext}>
+                  {bdsmPreference.length}/3 선택됨
+                </Text>
+              </View>
+              <ScrollView 
+                style={styles.bdsmListScrollView} 
+                contentContainerStyle={styles.bdsmListContainer}
+                showsVerticalScrollIndicator={true}
+              >
+                {([
+                  'vanilla', 'owner', 'daddy', 'mommy', 'dominant', 'master', 'mistress',
+                  'hunter', 'brattamer', 'degrader', 'rigger', 'boss', 'switch',
+                  'sadist', 'spanker', 'pet', 'little', 'submissive', 'slave',
+                  'prey', 'brat', 'degradee', 'ropebunny', 'servant', 'masochist', 'spankee'
+                ] as BDSMPreference[]).map((pref) => {
+                  const isSelected = bdsmPreference.includes(pref);
+                  const isDisabled = !isSelected && bdsmPreference.length >= 3;
+                  return (
+                    <TouchableOpacity
+                      key={pref}
+                      style={[
+                        styles.bdsmListItem,
+                        isSelected && styles.bdsmListItemSelected,
+                        isDisabled && styles.bdsmListItemDisabled,
+                      ]}
+                      onPress={() => {
+                        if (isDisabled) {
+                          Alert.alert('알림', '최대 3개까지 선택할 수 있습니다.');
+                          return;
+                        }
+                        if (isSelected) {
+                          // 이미 선택된 경우 제거
+                          setBdsmPreference(bdsmPreference.filter(p => p !== pref));
+                        } else {
+                          // 선택되지 않은 경우 추가
+                          setBdsmPreference([...bdsmPreference, pref]);
+                        }
+                      }}
+                      disabled={isDisabled}
+                    >
+                      <View style={styles.bdsmListItemContent}>
+                        <View style={[
+                          styles.bdsmListCheckbox,
+                          isSelected && { borderColor: '#1F2937', backgroundColor: '#1F2937' }
+                        ]}>
+                          {isSelected && <Text style={styles.bdsmListCheckmark}>✓</Text>}
+                        </View>
+                        <Text
+                          style={[
+                            styles.bdsmListText,
+                            isSelected && styles.bdsmListTextSelected,
+                            isDisabled && styles.bdsmListTextDisabled,
+                          ]}
+                        >
+                          {BDSM_LABELS[pref]}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+              <TouchableOpacity
+                style={styles.modalConfirmButton}
+                onPress={() => {
+                  if (bdsmPreference.length === 0) {
+                    Alert.alert('알림', '최소 1개 이상 선택해주세요.');
+                    return;
+                  }
+                  setShowBdsmDropdown(false);
+                }}
+              >
+                <Text style={styles.modalConfirmButtonText}>확인</Text>
+              </TouchableOpacity>
             </View>
           </TouchableOpacity>
         </Modal>
@@ -463,7 +612,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 0,
     right: 0,
-    backgroundColor: '#4C6EF5',
+    backgroundColor: '#1F2937',
     width: 32,
     height: 32,
     borderRadius: 16,
@@ -485,7 +634,7 @@ const styles = StyleSheet.create({
   },
   avatarActionText: {
     fontSize: 14,
-    color: '#4C6EF5',
+    color: '#1F2937',
     fontWeight: '500',
   },
   avatarActionTextDanger: {
@@ -581,15 +730,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   inlineGenderButtonSelected: {
-    borderColor: '#8A4CEF',
-    backgroundColor: '#F3E8FF',
+    borderColor: '#1F2937',
+    backgroundColor: '#F3F4F6',
   },
   inlineGenderButtonText: {
     fontSize: 14,
     color: '#666',
   },
   inlineGenderButtonTextSelected: {
-    color: '#8A4CEF',
+    color: '#1F2937',
     fontWeight: '600',
   },
   inlineDropdownButton: {
@@ -627,15 +776,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   genderButtonSelected: {
-    borderColor: '#8A4CEF',
-    backgroundColor: '#F3E8FF',
+    borderColor: '#1F2937',
+    backgroundColor: '#1F2937',
   },
   genderButtonText: {
     fontSize: 14,
     color: '#666',
   },
   genderButtonTextSelected: {
-    color: '#8A4CEF',
+    color: '#1F2937',
     fontWeight: '600',
   },
   dropdownButton: {
@@ -681,18 +830,18 @@ const styles = StyleSheet.create({
     borderBottomColor: '#F0F0F0',
   },
   dropdownOptionSelected: {
-    backgroundColor: '#F3E8FF',
+    backgroundColor: '#F3F4F6',
   },
   dropdownOptionText: {
     fontSize: 16,
     color: '#000',
   },
   dropdownOptionTextSelected: {
-    color: '#8A4CEF',
+    color: '#1F2937',
     fontWeight: '600',
   },
   saveButton: {
-    backgroundColor: '#8A4CEF',
+    backgroundColor: '#1F2937',
     borderRadius: 12,
     paddingVertical: 16,
     alignItems: 'center',
@@ -705,5 +854,122 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
+  },
+  dropdownOptionDisabled: {
+    opacity: 0.5,
+  },
+  dropdownOptionTextDisabled: {
+    color: '#999',
+  },
+  checkboxContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 4,
+    borderWidth: 2,
+    borderColor: '#D0D5DD',
+    marginRight: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  checkboxSelected: {
+    backgroundColor: '#1F2937',
+    borderColor: '#1F2937',
+  },
+  checkboxDisabled: {
+    borderColor: '#E0E0E0',
+  },
+  checkmark: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  modalHeader: {
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
+  },
+  modalHeaderText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#111',
+    marginBottom: 4,
+  },
+  modalHeaderSubtext: {
+    fontSize: 14,
+    color: '#667085',
+  },
+  modalConfirmButton: {
+    backgroundColor: '#1F2937',
+    paddingVertical: 16,
+    alignItems: 'center',
+    borderTopWidth: 1,
+    borderTopColor: '#F0F0F0',
+  },
+  modalConfirmButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  hintText: {
+    fontSize: 12,
+    color: '#667085',
+    marginTop: 4,
+    marginLeft: 4,
+  },
+  bdsmListScrollView: {
+    maxHeight: 400,
+  },
+  bdsmListContainer: {
+    padding: 12,
+  },
+  bdsmListItem: {
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
+    backgroundColor: '#fff',
+  },
+  bdsmListItemSelected: {
+    backgroundColor: 'rgba(31, 41, 55, 0.12)',
+  },
+  bdsmListItemDisabled: {
+    opacity: 0.5,
+  },
+  bdsmListItemContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  bdsmListCheckbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 4,
+    borderWidth: 2,
+    borderColor: '#D0D5DD',
+    marginRight: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'transparent',
+  },
+  bdsmListCheckmark: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  bdsmListText: {
+    fontSize: 15,
+    color: '#344054',
+    flex: 1,
+  },
+  bdsmListTextSelected: {
+    color: '#1F2937',
+    fontWeight: '600',
+  },
+  bdsmListTextDisabled: {
+    color: '#999',
   },
 });

@@ -8,9 +8,16 @@ export type RootStackParamList = {
     partner: User;
   };
   ProfileSettings: undefined;
+  UserProfile: {
+    user: User;
+  };
   Charge: undefined;
   BlockedUsers: undefined;
   CustomerService: undefined;
+  TermsOfService: undefined;
+  PrivacyPolicy: undefined;
+  NotificationSettings: undefined;
+  NotificationTest: undefined;
 };
 
 export type MainTabParamList = {

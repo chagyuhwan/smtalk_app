@@ -14,6 +14,7 @@ import {
   Image,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import { useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
 import { firebaseAuthService } from '../services/FirebaseAuthService';
@@ -24,6 +25,7 @@ import { FirebaseRecaptchaVerifierModal } from 'expo-firebase-recaptcha';
 import app from '../config/firebase';
 import { BDSMPreference, Region } from '../types';
 import { REGION_NAMES, REGION_LIST, getLocationFromRegion } from '../utils/regions';
+import { performanceMonitor } from '../utils/PerformanceMonitor';
 
 type PhoneAuthScreenNavigationProp = NativeStackNavigationProp<
   RootStackParamList,
@@ -37,6 +39,16 @@ interface Props {
 type AuthStep = 'phone' | 'code' | 'signup';
 
 export default function PhoneAuthScreen({ navigation }: Props) {
+  // 성능 측정: 화면 포커스 시
+  useFocusEffect(
+    React.useCallback(() => {
+      performanceMonitor.startScreenLoad('PhoneAuthScreen');
+      return () => {
+        performanceMonitor.endScreenLoad('PhoneAuthScreen');
+      };
+    }, [])
+  );
+  
   const [step, setStep] = useState<AuthStep>('phone');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [code, setCode] = useState('');
@@ -45,25 +57,49 @@ export default function PhoneAuthScreen({ navigation }: Props) {
   const [name, setName] = useState('');
   const [gender, setGender] = useState<'male' | 'female' | undefined>(undefined);
   const [age, setAge] = useState('');
-  const [bdsmPreference, setBdsmPreference] = useState<BDSMPreference | undefined>(undefined);
+  const [bdsmPreference, setBdsmPreference] = useState<BDSMPreference[]>([]);
   const [bio, setBio] = useState('');
   const [avatarUri, setAvatarUri] = useState<string | undefined>(undefined);
   const [region, setRegion] = useState<Region | undefined>(undefined);
   const [userId, setUserId] = useState<string>('');
   const [showBdsmDropdown, setShowBdsmDropdown] = useState(false);
   const [showRegionDropdown, setShowRegionDropdown] = useState(false);
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
+  const [agreedToPrivacy, setAgreedToPrivacy] = useState(false);
   const codeInputRef = useRef<TextInput>(null);
   const nameInputRef = useRef<TextInput>(null);
   const recaptchaVerifierRef = useRef<FirebaseRecaptchaVerifierModal>(null);
 
   const BDSM_LABELS: Record<BDSMPreference, string> = {
-    dominant: '지배',
-    submissive: '복종',
+    vanilla: '바닐라',
+    owner: '오너',
+    daddy: '대디',
+    mommy: '마미',
+    dominant: '도미넌트',
+    master: '마스터',
+    mistress: '미스트리스',
+    hunter: '헌터',
+    brattamer: '브랫테이머',
+    degrader: '디그레이더',
+    rigger: '리거',
+    boss: '보스',
     switch: '스위치',
-    none: '없음',
+    sadist: '사디스트',
+    spanker: '스팽커',
+    pet: '펫',
+    little: '리틀',
+    submissive: '서브미시브',
+    slave: '슬레이브',
+    prey: '프레이',
+    brat: '브랫',
+    degradee: '디그레이디',
+    ropebunny: '로프버니',
+    servant: '서번트',
+    masochist: '마조히스트',
+    spankee: '스팽키이거',
   };
 
-  const AVATAR_COLORS = ['#FF6B6B', '#4ECDC4', '#A29BFE', '#FFD93D', '#6C5CE7', '#4C6EF5'];
+  const AVATAR_COLORS = ['#FF6B6B', '#4ECDC4', '#1F2937', '#FFD93D', '#1F2937', '#1F2937'];
 
   // 이미지 선택
   const pickImage = useCallback(async () => {
@@ -219,8 +255,25 @@ export default function PhoneAuthScreen({ navigation }: Props) {
       return;
     }
 
-    if (!bdsmPreference) {
-      Alert.alert('알림', 'BDSM 성향을 선택해주세요.');
+    // 성인인증: 만 19세 이상만 가입 가능
+    if (ageNum < 19) {
+      Alert.alert('가입 불가', '만 19세 이상만 가입할 수 있습니다.');
+      return;
+    }
+
+    // 약관 동의 확인
+    if (!agreedToTerms || !agreedToPrivacy) {
+      Alert.alert('알림', '이용약관 및 개인정보 처리방침에 동의해주세요.');
+      return;
+    }
+
+    if (!bdsmPreference || bdsmPreference.length === 0) {
+      Alert.alert('알림', 'BDSM 성향을 최소 1개 이상 선택해주세요.');
+      return;
+    }
+
+    if (bdsmPreference.length > 3) {
+      Alert.alert('알림', 'BDSM 성향은 최대 3개까지 선택할 수 있습니다.');
       return;
     }
 
@@ -252,7 +305,7 @@ export default function PhoneAuthScreen({ navigation }: Props) {
       let avatarUrl: string | undefined = undefined;
       if (avatarUri) {
         try {
-          avatarUrl = await firebaseStorageService.uploadUserAvatar(userId, avatarUri);
+          avatarUrl = await firebaseStorageService.uploadAvatar(userId, avatarUri);
           console.log('프로필 이미지 업로드 성공:', avatarUrl);
         } catch (error) {
           console.error('프로필 이미지 업로드 실패:', error);
@@ -282,7 +335,7 @@ export default function PhoneAuthScreen({ navigation }: Props) {
         region?: Region;
         isAdmin: boolean;
         points?: number;
-        bdsmPreference?: BDSMPreference;
+        bdsmPreference?: BDSMPreference[];
         bio?: string;
       } = {
         id: userId,
@@ -301,11 +354,29 @@ export default function PhoneAuthScreen({ navigation }: Props) {
       
       // 신규 사용자인 경우에만 포인트 설정 (기존 사용자는 포인트 유지)
       if (!existingUser) {
-        userData.points = 1000; // 가입 시 기본 포인트
+        userData.points = 100; // 가입 시 기본 포인트
       }
       // 기존 사용자인 경우 points를 전달하지 않아서 기존 포인트가 유지됨
       
       await firebaseFirestoreService.createOrUpdateUser(userData);
+
+      // 약관 동의 내역 저장
+      try {
+        await firebaseFirestoreService.setUserAgreement(userId, {
+          termsAgreed: true,
+          privacyAgreed: true,
+          termsAgreedAt: Date.now(),
+          privacyAgreedAt: Date.now(),
+        });
+      } catch (error) {
+        console.error('약관 동의 내역 저장 실패:', error);
+        // 약관 동의 저장 실패해도 회원가입은 진행
+      }
+
+      // Analytics: 회원가입 완료
+      const { analyticsService } = await import('../services/AnalyticsService');
+      analyticsService.logSignUp('phone');
+      analyticsService.setUserId(userId);
 
       Alert.alert('성공', '회원가입이 완료되었습니다.');
       // 메인 화면으로 이동
@@ -315,7 +386,7 @@ export default function PhoneAuthScreen({ navigation }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [phoneNumber, name, gender, age, bdsmPreference, bio, avatarUri, region, navigation]);
+  }, [phoneNumber, name, gender, age, bdsmPreference, bio, avatarUri, region, navigation, agreedToTerms, agreedToPrivacy]);
 
   // 인증 코드 재발송
   const handleResendCode = useCallback(async () => {
@@ -534,11 +605,18 @@ export default function PhoneAuthScreen({ navigation }: Props) {
               style={styles.dropdownButton}
               onPress={() => setShowBdsmDropdown(true)}
             >
-              <Text style={[styles.dropdownText, !bdsmPreference && styles.dropdownPlaceholder]}>
-                {bdsmPreference ? BDSM_LABELS[bdsmPreference] : '선택하세요'}
+              <Text style={[styles.dropdownText, bdsmPreference.length === 0 && styles.dropdownPlaceholder]}>
+                {bdsmPreference.length > 0 
+                  ? bdsmPreference.map(pref => BDSM_LABELS[pref]).join(', ')
+                  : '선택하세요'}
               </Text>
               <Text style={styles.dropdownArrow}>▼</Text>
             </TouchableOpacity>
+            {bdsmPreference.length > 0 && (
+              <Text style={styles.hintText}>
+                {bdsmPreference.length}/3 선택됨
+              </Text>
+            )}
 
             <Text style={styles.label}>자기소개</Text>
             <TextInput
@@ -552,31 +630,61 @@ export default function PhoneAuthScreen({ navigation }: Props) {
               textAlignVertical="top"
             />
 
+            {/* 약관 동의 */}
+            <View style={styles.termsContainer}>
+              <TouchableOpacity
+                style={styles.checkboxRow}
+                onPress={() => setAgreedToTerms(!agreedToTerms)}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.checkbox, agreedToTerms && styles.checkboxSelected]}>
+                  {agreedToTerms && <Text style={styles.checkmark}>✓</Text>}
+                </View>
+                <View style={styles.checkboxLabelContainer}>
+                  <Text style={styles.checkboxLabel}>
+                    <Text style={styles.checkboxLabelRequired}>[필수]</Text> 이용약관에 동의합니다
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => navigation.navigate('TermsOfService')}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
+                    <Text style={styles.termsLink}>약관 보기</Text>
+                  </TouchableOpacity>
+                </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.checkboxRow}
+                onPress={() => setAgreedToPrivacy(!agreedToPrivacy)}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.checkbox, agreedToPrivacy && styles.checkboxSelected]}>
+                  {agreedToPrivacy && <Text style={styles.checkmark}>✓</Text>}
+                </View>
+                <View style={styles.checkboxLabelContainer}>
+                  <Text style={styles.checkboxLabel}>
+                    <Text style={styles.checkboxLabelRequired}>[필수]</Text> 개인정보 처리방침에 동의합니다
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => navigation.navigate('PrivacyPolicy')}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
+                    <Text style={styles.termsLink}>약관 보기</Text>
+                  </TouchableOpacity>
+                </View>
+              </TouchableOpacity>
+            </View>
+
             <TouchableOpacity
-              style={[styles.button, loading && styles.buttonDisabled]}
+              style={[styles.button, (loading || !agreedToTerms || !agreedToPrivacy) && styles.buttonDisabled]}
               onPress={handleSignup}
-              disabled={loading}
+              disabled={loading || !agreedToTerms || !agreedToPrivacy}
             >
               {loading ? (
                 <ActivityIndicator color="#fff" />
               ) : (
                 <Text style={styles.buttonText}>완료</Text>
               )}
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.backButton}
-              onPress={() => {
-                setStep('code');
-                setName('');
-                setGender(undefined);
-                setAge('');
-                setBdsmPreference(undefined);
-                setBio('');
-                setAvatarUri(undefined);
-                setRegion(undefined);
-              }}
-            >
-              <Text style={styles.backText}>인증 코드 다시 입력</Text>
             </TouchableOpacity>
           </ScrollView>
         )}
@@ -635,28 +743,81 @@ export default function PhoneAuthScreen({ navigation }: Props) {
             onPress={() => setShowBdsmDropdown(false)}
           >
             <View style={styles.dropdownModal}>
-              {(['dominant', 'submissive', 'switch', 'none'] as BDSMPreference[]).map((pref) => (
-                <TouchableOpacity
-                  key={pref}
-                  style={[
-                    styles.dropdownOption,
-                    bdsmPreference === pref && styles.dropdownOptionSelected,
-                  ]}
-                  onPress={() => {
-                    setBdsmPreference(pref);
-                    setShowBdsmDropdown(false);
-                  }}
-                >
-                  <Text
-                    style={[
-                      styles.dropdownOptionText,
-                      bdsmPreference === pref && styles.dropdownOptionTextSelected,
-                    ]}
-                  >
-                    {BDSM_LABELS[pref]}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalHeaderText}>BDSM 성향 선택</Text>
+                <Text style={styles.modalHeaderSubtext}>
+                  {bdsmPreference.length}/3 선택됨
+                </Text>
+              </View>
+              <ScrollView 
+                style={styles.bdsmListScrollView} 
+                contentContainerStyle={styles.bdsmListContainer}
+                showsVerticalScrollIndicator={true}
+              >
+                {([
+                  'vanilla', 'owner', 'daddy', 'mommy', 'dominant', 'master', 'mistress',
+                  'hunter', 'brattamer', 'degrader', 'rigger', 'boss', 'switch',
+                  'sadist', 'spanker', 'pet', 'little', 'submissive', 'slave',
+                  'prey', 'brat', 'degradee', 'ropebunny', 'servant', 'masochist', 'spankee'
+                ] as BDSMPreference[]).map((pref) => {
+                  const isSelected = bdsmPreference.includes(pref);
+                  const isDisabled = !isSelected && bdsmPreference.length >= 3;
+                  return (
+                    <TouchableOpacity
+                      key={pref}
+                      style={[
+                        styles.bdsmListItem,
+                        isSelected && styles.bdsmListItemSelected,
+                        isDisabled && styles.bdsmListItemDisabled,
+                      ]}
+                      onPress={() => {
+                        if (isDisabled) {
+                          Alert.alert('알림', '최대 3개까지 선택할 수 있습니다.');
+                          return;
+                        }
+                        if (isSelected) {
+                          // 이미 선택된 경우 제거
+                          setBdsmPreference(bdsmPreference.filter(p => p !== pref));
+                        } else {
+                          // 선택되지 않은 경우 추가
+                          setBdsmPreference([...bdsmPreference, pref]);
+                        }
+                      }}
+                      disabled={isDisabled}
+                    >
+                      <View style={styles.bdsmListItemContent}>
+                        <View style={[
+                          styles.bdsmListCheckbox,
+                          isSelected && { borderColor: '#1F2937', backgroundColor: '#1F2937' }
+                        ]}>
+                          {isSelected && <Text style={styles.bdsmListCheckmark}>✓</Text>}
+                        </View>
+                        <Text
+                          style={[
+                            styles.bdsmListText,
+                            isSelected && styles.bdsmListTextSelected,
+                            isDisabled && styles.bdsmListTextDisabled,
+                          ]}
+                        >
+                          {BDSM_LABELS[pref]}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+              <TouchableOpacity
+                style={styles.modalConfirmButton}
+                onPress={() => {
+                  if (bdsmPreference.length === 0) {
+                    Alert.alert('알림', '최소 1개 이상 선택해주세요.');
+                    return;
+                  }
+                  setShowBdsmDropdown(false);
+                }}
+              >
+                <Text style={styles.modalConfirmButtonText}>확인</Text>
+              </TouchableOpacity>
             </View>
           </TouchableOpacity>
         </Modal>
@@ -711,7 +872,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
   },
   button: {
-    backgroundColor: '#4C6EF5',
+    backgroundColor: '#1F2937',
     borderRadius: 8,
     paddingVertical: 14,
     alignItems: 'center',
@@ -737,7 +898,7 @@ const styles = StyleSheet.create({
   },
   resendText: {
     fontSize: 14,
-    color: '#4C6EF5',
+    color: '#1F2937',
     fontWeight: '500',
   },
   resendTextDisabled: {
@@ -766,8 +927,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
   },
   genderButtonActive: {
-    borderColor: '#4C6EF5',
-    backgroundColor: '#EEF2FF',
+    borderColor: '#1F2937',
+    backgroundColor: '#F3F4F6',
   },
   genderText: {
     fontSize: 16,
@@ -775,7 +936,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   genderTextActive: {
-    color: '#4C6EF5',
+    color: '#1F2937',
     fontWeight: '600',
   },
   dropdownButton: {
@@ -830,15 +991,133 @@ const styles = StyleSheet.create({
     borderBottomColor: '#F0F0F0',
   },
   dropdownOptionSelected: {
-    backgroundColor: '#F3E8FF',
+    backgroundColor: '#F3F4F6',
   },
   dropdownOptionText: {
     fontSize: 16,
     color: '#000',
   },
   dropdownOptionTextSelected: {
-    color: '#8A4CEF',
+    color: '#1F2937',
     fontWeight: '600',
+  },
+  dropdownOptionDisabled: {
+    opacity: 0.5,
+  },
+  dropdownOptionTextDisabled: {
+    color: '#999',
+  },
+  checkboxContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 4,
+    borderWidth: 2,
+    borderColor: '#D0D5DD',
+    marginRight: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  checkboxSelected: {
+    backgroundColor: '#1F2937',
+    borderColor: '#1F2937',
+  },
+  checkboxDisabled: {
+    borderColor: '#E0E0E0',
+  },
+  checkmark: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  modalHeader: {
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
+  },
+  modalHeaderText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#111',
+    marginBottom: 4,
+  },
+  modalHeaderSubtext: {
+    fontSize: 14,
+    color: '#667085',
+  },
+  modalConfirmButton: {
+    backgroundColor: '#1F2937',
+    paddingVertical: 16,
+    alignItems: 'center',
+    borderTopWidth: 1,
+    borderTopColor: '#F0F0F0',
+  },
+  modalConfirmButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  hintText: {
+    fontSize: 12,
+    color: '#667085',
+    marginTop: -16,
+    marginBottom: 20,
+    marginLeft: 4,
+  },
+  bdsmListScrollView: {
+    maxHeight: 400,
+  },
+  bdsmListContainer: {
+    padding: 12,
+  },
+  bdsmListItem: {
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
+    backgroundColor: '#fff',
+  },
+  bdsmListItemSelected: {
+    backgroundColor: '#F3F4F6',
+  },
+  bdsmListItemDisabled: {
+    opacity: 0.5,
+  },
+  bdsmListItemContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  bdsmListCheckbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 4,
+    borderWidth: 2,
+    borderColor: '#D0D5DD',
+    marginRight: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'transparent',
+  },
+  bdsmListCheckmark: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  bdsmListText: {
+    fontSize: 15,
+    color: '#344054',
+    flex: 1,
+  },
+  bdsmListTextSelected: {
+    color: '#1F2937',
+    fontWeight: '600',
+  },
+  bdsmListTextDisabled: {
+    color: '#999',
   },
   avatarSection: {
     alignItems: 'center',
@@ -872,7 +1151,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 0,
     right: 0,
-    backgroundColor: '#4C6EF5',
+    backgroundColor: '#1F2937',
     width: 32,
     height: 32,
     borderRadius: 16,
@@ -894,11 +1173,45 @@ const styles = StyleSheet.create({
   },
   avatarActionText: {
     fontSize: 14,
-    color: '#4C6EF5',
+    color: '#1F2937',
     fontWeight: '500',
   },
   avatarActionTextDanger: {
     color: '#FF6B6B',
+  },
+  termsContainer: {
+    marginTop: 8,
+    marginBottom: 20,
+  },
+  checkboxRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 12,
+  },
+  checkboxChecked: {
+    backgroundColor: '#1F2937',
+    borderColor: '#1F2937',
+  },
+  checkboxLabelContainer: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+  },
+  checkboxLabel: {
+    fontSize: 14,
+    color: '#344054',
+    lineHeight: 20,
+  },
+  checkboxLabelRequired: {
+    color: '#F04438',
+    fontWeight: '600',
+  },
+  termsLink: {
+    fontSize: 14,
+    color: '#1F2937',
+    marginLeft: 4,
+    textDecorationLine: 'underline',
   },
 });
 

@@ -1,6 +1,32 @@
 export type Gender = 'male' | 'female';
 
-export type BDSMPreference = 'dominant' | 'submissive' | 'switch' | 'none';
+export type BDSMPreference = 
+  | 'vanilla'         // 바닐라
+  | 'owner'           // 오너
+  | 'daddy'           // 대디
+  | 'mommy'           // 마미
+  | 'dominant'        // 도미넌트
+  | 'master'          // 마스터
+  | 'mistress'        // 미스트리스
+  | 'hunter'          // 헌터
+  | 'brattamer'       // 브랫테이머
+  | 'degrader'        // 디그레이더
+  | 'rigger'          // 리거
+  | 'boss'            // 보스
+  | 'switch'          // 스위치
+  | 'sadist'          // 사디스트
+  | 'spanker'         // 스팽커
+  | 'pet'             // 펫
+  | 'little'          // 리틀
+  | 'submissive'      // 서브미시브
+  | 'slave'           // 슬레이브
+  | 'prey'            // 프레이
+  | 'brat'            // 브랫
+  | 'degradee'        // 디그레이디
+  | 'ropebunny'       // 로프버니
+  | 'servant'         // 서번트
+  | 'masochist'       // 마조히스트
+  | 'spankee';        // 스팽키이거
 
 export type Region = 
   | 'seoul'           // 서울
@@ -35,13 +61,15 @@ export interface User {
   location?: Location;
   region?: Region; // 지역 정보
   isAdmin?: boolean; // 관리자 여부
-  bdsmPreference?: BDSMPreference; // BDSM 성향
+  bdsmPreference?: BDSMPreference[]; // BDSM 성향 (최대 3개, 최소 1개 필수)
   bio?: string; // 자기소개
   deletionRequestedAt?: number; // 탈퇴 요청일 (타임스탬프)
   deletionScheduledAt?: number; // 탈퇴 예정일 (타임스탬프, 요청일 + 30일)
   lastAttendanceDate?: string; // 마지막 출석체크 날짜 (YYYY-MM-DD 형식)
   suspendedUntil?: number; // 정지 해제일 (타임스탬프)
   suspensionType?: '1day' | '7days' | 'permanent'; // 정지 타입
+  likeCount?: number; // 좋아요 수
+  likedBy?: Record<string, number>; // 좋아요를 누른 사용자 목록 (userId -> timestamp)
 }
 
 export interface Message {
@@ -59,6 +87,8 @@ export interface ChatRoom {
   participantsInfo?: [User, User]; // 참가자 정보 (선택적)
   lastMessage?: Message;
   unreadCount: number;
+  pinnedBy?: Record<string, number>; // 고정한 사용자 목록 (userId -> pinnedAt timestamp)
+  isPinned?: boolean; // 현재 사용자가 고정했는지 여부 (클라이언트에서 계산)
 }
 
 export interface Post {
@@ -95,6 +125,14 @@ export interface Purchase {
   platform: 'ios' | 'android';
   timestamp: number;
   verified: boolean; // 영수증 검증 여부
+}
+
+export interface NotificationSettings {
+  enabled: boolean; // 전체 알림 ON/OFF
+  messages: boolean; // 메시지 알림
+  likes: boolean; // 좋아요 알림
+  reports: boolean; // 신고 처리 완료 알림
+  updatedAt: number; // 마지막 업데이트 시간
 }
 
 

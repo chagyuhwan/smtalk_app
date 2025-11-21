@@ -1,26 +1,92 @@
-import React, { useMemo, useCallback } from 'react';
+import React, { useMemo, useCallback, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   FlatList,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   Image,
   Alert,
+  ScrollView,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useChat } from '../context/ChatContext';
 import { RootStackParamList } from '../navigation/types';
-import { User, ReportReason } from '../types';
+import { User, ReportReason, BDSMPreference, Region } from '../types';
+import { REGION_NAMES, REGION_LIST } from '../utils/regions';
+import { performanceMonitor } from '../utils/PerformanceMonitor';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
+const BDSM_LABELS: Record<BDSMPreference, string> = {
+  vanilla: '바닐라',
+  owner: '오너',
+  daddy: '대디',
+  mommy: '마미',
+  dominant: '도미넌트',
+  master: '마스터',
+  mistress: '미스트리스',
+  hunter: '헌터',
+  brattamer: '브랫테이머',
+  degrader: '디그레이더',
+  rigger: '리거',
+  boss: '보스',
+  switch: '스위치',
+  sadist: '사디스트',
+  spanker: '스팽커',
+  pet: '펫',
+  little: '리틀',
+  submissive: '서브미시브',
+  slave: '슬레이브',
+  prey: '프레이',
+  brat: '브랫',
+  degradee: '디그레이디',
+  ropebunny: '로프버니',
+  servant: '서번트',
+  masochist: '마조히스트',
+  spankee: '스팽키이거',
+};
+
 const CHAT_COST = 50;
+
+type GenderFilter = 'all' | 'male' | 'female';
+type BDSMFilter = 'all' | BDSMPreference;
+type AgeFilter = 'all' | '20s' | '30s' | '40s' | '50s';
 
 export default function UsersScreen() {
   const navigation = useNavigation<NavigationProp>();
   const { contacts, currentUser, points, createOrOpenChat, deductPoints, isBlocked, blockUser, reportUser } = useChat();
+  
+  // 성능 측정: 화면 포커스 시
+  useFocusEffect(
+    React.useCallback(() => {
+      performanceMonitor.startScreenLoad('UsersScreen');
+      return () => {
+        performanceMonitor.endScreenLoad('UsersScreen');
+      };
+    }, [])
+  );
+  
+  const [selectedRegion, setSelectedRegion] = useState<Region | 'all'>('all');
+  const [genderFilter, setGenderFilter] = useState<GenderFilter>('all');
+  const [bdsmFilter, setBdsmFilter] = useState<BDSMFilter>('all');
+  const [ageFilter, setAgeFilter] = useState<AgeFilter>('all');
+  const [showRegionDropdown, setShowRegionDropdown] = useState(false);
+  const [showGenderDropdown, setShowGenderDropdown] = useState(false);
+  const [showBdsmDropdown, setShowBdsmDropdown] = useState(false);
+  const [showAgeDropdown, setShowAgeDropdown] = useState(false);
+
+  const FILTER_MARGIN_HORIZONTAL = 0;
+  const FILTER_PADDING_HORIZONTAL = 20;
+  const MIN_DROPDOWN_WIDTH = 140;
+
+  const [dropdownTop, setDropdownTop] = useState(0);
+  const [regionMetrics, setRegionMetrics] = useState({ x: 0, width: MIN_DROPDOWN_WIDTH });
+  const [genderMetrics, setGenderMetrics] = useState({ x: 0, width: MIN_DROPDOWN_WIDTH });
+  const [bdsmMetrics, setBdsmMetrics] = useState({ x: 0, width: MIN_DROPDOWN_WIDTH });
+  const [ageMetrics, setAgeMetrics] = useState({ x: 0, width: MIN_DROPDOWN_WIDTH });
 
   // 디버깅: contacts와 currentUser 확인
   console.log('=== UsersScreen 디버깅 ===');
@@ -35,9 +101,10 @@ export default function UsersScreen() {
     console.log('=== 필터링 시작 ===');
     console.log('필터링 전 contacts:', contacts.length, '명');
     
-    const filtered = contacts.filter((contact) => {
+    let filtered = contacts.filter((contact) => {
       const isNotCurrentUser = !currentUser.id || contact.id !== currentUser.id;
       const isNotBlocked = !isBlocked(contact.id);
+      const isNotAdmin = !contact.isAdmin; // 운영자 계정 제외
       
       if (!isNotCurrentUser) {
         console.log('현재 사용자로 필터링됨:', contact.id, contact.name);
@@ -45,16 +112,56 @@ export default function UsersScreen() {
       if (!isNotBlocked) {
         console.log('차단된 사용자로 필터링됨:', contact.id, contact.name);
       }
+      if (!isNotAdmin) {
+        console.log('운영자 계정으로 필터링됨:', contact.id, contact.name);
+      }
       
-      return isNotCurrentUser && isNotBlocked;
+      return isNotCurrentUser && isNotBlocked && isNotAdmin;
     });
+
+    // 지역 필터 적용
+    if (selectedRegion !== 'all') {
+      filtered = filtered.filter((contact) => contact.region === selectedRegion);
+    }
+
+    // 성별 필터 적용
+    if (genderFilter !== 'all') {
+      filtered = filtered.filter((contact) => contact.gender === genderFilter);
+    }
+
+    // BDSM 필터 적용
+    if (bdsmFilter !== 'all') {
+      filtered = filtered.filter((contact) => 
+        contact.bdsmPreference ? contact.bdsmPreference.includes(bdsmFilter) : false
+      );
+    }
+
+    // 나이 필터 적용
+    if (ageFilter !== 'all' && ageFilter) {
+      filtered = filtered.filter((contact) => {
+        if (!contact.age) return false;
+        const age = contact.age;
+        switch (ageFilter) {
+          case '20s':
+            return age >= 20 && age < 30;
+          case '30s':
+            return age >= 30 && age < 40;
+          case '40s':
+            return age >= 40 && age < 50;
+          case '50s':
+            return age >= 50;
+          default:
+            return true;
+        }
+      });
+    }
     
     console.log('필터링 후 contacts:', filtered.length, '명');
     console.log('필터링된 사용자 목록:', filtered.map(u => ({ id: u.id, name: u.name })));
     console.log('=== 필터링 완료 ===');
     
     return filtered;
-  }, [contacts, currentUser.id, isBlocked]);
+  }, [contacts, currentUser.id, isBlocked, selectedRegion, genderFilter, bdsmFilter, ageFilter]);
 
   // 이름순으로 정렬
   const sortedContacts = useMemo(() => {
@@ -62,6 +169,77 @@ export default function UsersScreen() {
       return a.name.localeCompare(b.name);
     });
   }, [filteredContacts]);
+
+  const regionFilterLabel = useMemo(() => {
+    return selectedRegion === 'all' ? '지역' : REGION_NAMES[selectedRegion];
+  }, [selectedRegion]);
+
+  const genderFilterLabel = useMemo(() => {
+    switch (genderFilter) {
+      case 'male':
+        return '남자';
+      case 'female':
+        return '여자';
+      default:
+        return '전체성별';
+    }
+  }, [genderFilter]);
+
+  const bdsmFilterLabel = useMemo(() => {
+    if (bdsmFilter === 'all') {
+      return 'BDSM';
+    }
+    return BDSM_LABELS[bdsmFilter] || 'BDSM';
+  }, [bdsmFilter]);
+
+  const ageFilterLabel = useMemo(() => {
+    switch (ageFilter) {
+      case '20s':
+        return '20대';
+      case '30s':
+        return '30대';
+      case '40s':
+        return '40대';
+      case '50s':
+        return '50대+';
+      default:
+        return '나이';
+    }
+  }, [ageFilter]);
+
+  const isRegionFilterActive = showRegionDropdown || selectedRegion !== 'all';
+  const isGenderFilterActive = showGenderDropdown || genderFilter !== 'all';
+  const isBdsmFilterActive = showBdsmDropdown || bdsmFilter !== 'all';
+  const isAgeFilterActive = showAgeDropdown || ageFilter !== 'all';
+
+  const closeAllDropdowns = useCallback(() => {
+    setShowRegionDropdown(false);
+    setShowGenderDropdown(false);
+    setShowBdsmDropdown(false);
+    setShowAgeDropdown(false);
+  }, []);
+
+  const selectRegion = useCallback((value: Region | 'all') => {
+    setSelectedRegion(value);
+    setShowRegionDropdown(false);
+  }, []);
+
+  const selectGenderFilter = useCallback((value: GenderFilter) => {
+    setGenderFilter(value);
+    setShowGenderDropdown(false);
+  }, []);
+
+  const selectBdsmFilter = useCallback((value: BDSMFilter) => {
+    setBdsmFilter(value);
+    setShowBdsmDropdown(false);
+  }, []);
+
+  const selectAgeFilter = useCallback((value: AgeFilter) => {
+    setAgeFilter(value);
+    setShowAgeDropdown(false);
+  }, []);
+
+  const isDropdownOpen = showRegionDropdown || showGenderDropdown || showBdsmDropdown || showAgeDropdown;
 
   const handleReportUser = useCallback((user: User) => {
     const reportReasons: { label: string; value: ReportReason }[] = [
@@ -128,45 +306,8 @@ export default function UsersScreen() {
   }, [handleReportUser, handleBlockUser]);
 
   const handleUserPress = (user: User) => {
-    // 포인트 확인
-    if (points < CHAT_COST) {
-      Alert.alert('포인트 부족', `채팅을 시작하려면 ${CHAT_COST}포인트가 필요합니다.`);
-      return;
-    }
-
-    // 채팅 시작 확인
-    Alert.alert(
-      '채팅 시작',
-      `${user.name}님과의 채팅을 시작하시겠습니까?\n\n${CHAT_COST}포인트가 차감됩니다.`,
-      [
-        { text: '취소', style: 'cancel' },
-        {
-          text: '확인',
-          onPress: async () => {
-            // 포인트 차감
-            const success = await deductPoints(CHAT_COST);
-            if (!success) {
-              Alert.alert('오류', '포인트가 부족하거나 차감에 실패했습니다.');
-              return;
-            }
-
-            // 채팅방 생성 및 이동
-            try {
-              const roomId = await createOrOpenChat(user);
-              if (roomId) {
-                navigation.navigate('Chat', {
-                  chatRoomId: roomId,
-                  partner: user,
-                });
-              }
-            } catch (error: any) {
-              console.error('채팅방 생성 오류:', error);
-              Alert.alert('오류', '채팅방을 생성하는 중 오류가 발생했습니다.');
-            }
-          },
-        },
-      ]
-    );
+    // 프로필 화면으로 이동
+    navigation.navigate('UserProfile', { user });
   };
 
   const renderUser = ({ item }: { item: User }) => {
@@ -175,13 +316,18 @@ export default function UsersScreen() {
       return name.charAt(0).toUpperCase() || '?';
     };
 
-    const getAvatarColor = (id: string) => {
-      const colors = ['#4C6EF5', '#FF6B6B', '#4ECDC4', '#A29BFE', '#FFD93D', '#6C5CE7'];
-      return colors[id.length % colors.length];
+    const getAvatarColor = (gender?: string, hasAvatar?: boolean) => {
+      // 프로필 사진이 없을 때 성별에 따라 색상 설정
+      if (!hasAvatar && gender) {
+        return gender === 'female' ? '#F3AAC2' : '#8FB5DF'; // 여자는 핑크, 남자는 연한 파란색
+      }
+      // 프로필 사진이 있거나 성별 정보가 없을 때는 기본 색상
+      const colors = ['#1F2937', '#1F2937', '#1F2937', '#1F2937', '#FFD93D', '#1F2937'];
+      return colors[item.id.length % colors.length];
     };
 
     const initial = getInitial(item.name);
-    const avatarColor = getAvatarColor(item.id);
+    const avatarColor = getAvatarColor(item.gender, !!item.avatar);
 
     return (
       <TouchableOpacity
@@ -239,6 +385,297 @@ export default function UsersScreen() {
         <Text style={styles.title}>사용자</Text>
         <View style={styles.headerSpacer} />
       </View>
+
+      {/* 드롭다운 오버레이 */}
+      {isDropdownOpen && (
+        <TouchableWithoutFeedback onPress={closeAllDropdowns}>
+          <View style={styles.dropdownOverlay} />
+        </TouchableWithoutFeedback>
+      )}
+
+      {/* 필터 탭 */}
+      <View
+        style={styles.filterWrapper}
+        onLayout={(e) => {
+          const { y, height } = e.nativeEvent.layout;
+          setDropdownTop(y + height);
+        }}
+      >
+        <View style={styles.filterBar}>
+          <TouchableOpacity
+            style={styles.filterBarItem}
+            activeOpacity={0.7}
+            onPress={() => {
+              setShowRegionDropdown((prev) => !prev);
+              setShowGenderDropdown(false);
+              setShowBdsmDropdown(false);
+              setShowAgeDropdown(false);
+            }}
+            onLayout={(e) => {
+              const { x, width } = e.nativeEvent.layout;
+              setRegionMetrics({ x, width: Math.max(width, MIN_DROPDOWN_WIDTH) });
+            }}
+          >
+            <Text
+              style={[
+                styles.filterBarLabel,
+                isRegionFilterActive && styles.filterBarLabelActive,
+              ]}
+            >
+              {regionFilterLabel}
+            </Text>
+          </TouchableOpacity>
+          <View style={styles.filterBarDivider} />
+          <TouchableOpacity
+            style={styles.filterBarItem}
+            activeOpacity={0.7}
+            onPress={() => {
+              setShowGenderDropdown((prev) => !prev);
+              setShowRegionDropdown(false);
+              setShowBdsmDropdown(false);
+              setShowAgeDropdown(false);
+            }}
+            onLayout={(e) => {
+              const { x, width } = e.nativeEvent.layout;
+              setGenderMetrics({ x, width: Math.max(width, MIN_DROPDOWN_WIDTH) });
+            }}
+          >
+            <Text
+              style={[
+                styles.filterBarLabel,
+                isGenderFilterActive && styles.filterBarLabelActive,
+              ]}
+            >
+              {genderFilterLabel}
+            </Text>
+          </TouchableOpacity>
+          <View style={styles.filterBarDivider} />
+          <TouchableOpacity
+            style={styles.filterBarItem}
+            activeOpacity={0.7}
+            onPress={() => {
+              setShowBdsmDropdown((prev) => !prev);
+              setShowRegionDropdown(false);
+              setShowGenderDropdown(false);
+              setShowAgeDropdown(false);
+            }}
+            onLayout={(e) => {
+              const { x, width } = e.nativeEvent.layout;
+              setBdsmMetrics({ x, width: Math.max(width, MIN_DROPDOWN_WIDTH) });
+            }}
+          >
+            <Text
+              style={[
+                styles.filterBarLabel,
+                isBdsmFilterActive && styles.filterBarLabelActive,
+              ]}
+            >
+              {bdsmFilterLabel}
+            </Text>
+          </TouchableOpacity>
+          <View style={styles.filterBarDivider} />
+          <TouchableOpacity
+            style={styles.filterBarItem}
+            activeOpacity={0.7}
+            onPress={() => {
+              setShowAgeDropdown((prev) => !prev);
+              setShowRegionDropdown(false);
+              setShowGenderDropdown(false);
+              setShowBdsmDropdown(false);
+            }}
+            onLayout={(e) => {
+              const { x, width } = e.nativeEvent.layout;
+              setAgeMetrics({ x, width: Math.max(width, MIN_DROPDOWN_WIDTH) });
+            }}
+          >
+            <Text
+              style={[
+                styles.filterBarLabel,
+                isAgeFilterActive && styles.filterBarLabelActive,
+              ]}
+            >
+              {ageFilterLabel}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {showRegionDropdown && (
+        <TouchableWithoutFeedback onPress={closeAllDropdowns}>
+          <View
+            style={[
+              styles.dropdownPanel,
+              {
+                top: dropdownTop,
+                left: FILTER_MARGIN_HORIZONTAL + FILTER_PADDING_HORIZONTAL + regionMetrics.x,
+                width: Math.max(regionMetrics.width, 160),
+                maxHeight: 400,
+              },
+            ]}
+          >
+            <ScrollView style={{ maxHeight: 400 }}>
+              <TouchableOpacity
+                style={[styles.dropdownRow, selectedRegion === 'all' && styles.dropdownRowActive]}
+                onPress={() => selectRegion('all')}
+              >
+                <Text style={[styles.dropdownRowText, selectedRegion === 'all' && styles.dropdownRowTextActive]}>
+                  전체 지역
+                </Text>
+              </TouchableOpacity>
+              {REGION_LIST.map((region) => (
+                <TouchableOpacity
+                  key={region}
+                  style={[styles.dropdownRow, selectedRegion === region && styles.dropdownRowActive]}
+                  onPress={() => selectRegion(region)}
+                >
+                  <Text style={[styles.dropdownRowText, selectedRegion === region && styles.dropdownRowTextActive]}>
+                    {REGION_NAMES[region]}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </TouchableWithoutFeedback>
+      )}
+
+      {showGenderDropdown && (
+        <TouchableWithoutFeedback onPress={closeAllDropdowns}>
+          <View
+            style={[
+              styles.dropdownPanel,
+              {
+                top: dropdownTop,
+                left: FILTER_MARGIN_HORIZONTAL + FILTER_PADDING_HORIZONTAL + genderMetrics.x,
+                width: genderMetrics.width,
+              },
+            ]}
+          >
+            <TouchableOpacity
+              style={[styles.dropdownRow, genderFilter === 'all' && styles.dropdownRowActive]}
+              onPress={() => selectGenderFilter('all')}
+            >
+              <Text style={[styles.dropdownRowText, genderFilter === 'all' && styles.dropdownRowTextActive]}>
+                전체 성별
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.dropdownRow, genderFilter === 'male' && styles.dropdownRowActive]}
+              onPress={() => selectGenderFilter('male')}
+            >
+              <Text style={[styles.dropdownRowText, genderFilter === 'male' && styles.dropdownRowTextActive]}>
+                남자
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.dropdownRow, genderFilter === 'female' && styles.dropdownRowActive]}
+              onPress={() => selectGenderFilter('female')}
+            >
+              <Text style={[styles.dropdownRowText, genderFilter === 'female' && styles.dropdownRowTextActive]}>
+                여자
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableWithoutFeedback>
+      )}
+
+      {showBdsmDropdown && (
+        <TouchableWithoutFeedback onPress={closeAllDropdowns}>
+          <View
+            style={[
+              styles.dropdownPanel,
+              {
+                top: dropdownTop,
+                left: FILTER_MARGIN_HORIZONTAL + FILTER_PADDING_HORIZONTAL + bdsmMetrics.x,
+                width: bdsmMetrics.width,
+              },
+            ]}
+          >
+            <ScrollView style={{ maxHeight: 400 }}>
+              <TouchableOpacity
+                style={[styles.dropdownRow, bdsmFilter === 'all' && styles.dropdownRowActive]}
+                onPress={() => selectBdsmFilter('all')}
+              >
+                <Text style={[styles.dropdownRowText, bdsmFilter === 'all' && styles.dropdownRowTextActive]}>
+                  전체
+                </Text>
+              </TouchableOpacity>
+              {([
+                'vanilla', 'owner', 'daddy', 'mommy', 'dominant', 'master', 'mistress',
+                'hunter', 'brattamer', 'degrader', 'rigger', 'boss', 'switch',
+                'sadist', 'spanker', 'pet', 'little', 'submissive', 'slave',
+                'prey', 'brat', 'degradee', 'ropebunny', 'servant', 'masochist', 'spankee'
+              ] as BDSMPreference[]).map((pref) => (
+                <TouchableOpacity
+                  key={pref}
+                  style={[styles.dropdownRow, bdsmFilter === pref && styles.dropdownRowActive]}
+                  onPress={() => selectBdsmFilter(pref)}
+                >
+                  <Text style={[styles.dropdownRowText, bdsmFilter === pref && styles.dropdownRowTextActive]}>
+                    {BDSM_LABELS[pref]}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </TouchableWithoutFeedback>
+      )}
+
+      {showAgeDropdown && (
+        <TouchableWithoutFeedback onPress={closeAllDropdowns}>
+          <View
+            style={[
+              styles.dropdownPanel,
+              {
+                top: dropdownTop,
+                left: FILTER_MARGIN_HORIZONTAL + FILTER_PADDING_HORIZONTAL + ageMetrics.x,
+                width: ageMetrics.width,
+              },
+            ]}
+          >
+            <TouchableOpacity
+              style={[styles.dropdownRow, ageFilter === 'all' && styles.dropdownRowActive]}
+              onPress={() => selectAgeFilter('all')}
+            >
+              <Text style={[styles.dropdownRowText, ageFilter === 'all' && styles.dropdownRowTextActive]}>
+                전체 나이
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.dropdownRow, ageFilter === '20s' && styles.dropdownRowActive]}
+              onPress={() => selectAgeFilter('20s')}
+            >
+              <Text style={[styles.dropdownRowText, ageFilter === '20s' && styles.dropdownRowTextActive]}>
+                20대
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.dropdownRow, ageFilter === '30s' && styles.dropdownRowActive]}
+              onPress={() => selectAgeFilter('30s')}
+            >
+              <Text style={[styles.dropdownRowText, ageFilter === '30s' && styles.dropdownRowTextActive]}>
+                30대
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.dropdownRow, ageFilter === '40s' && styles.dropdownRowActive]}
+              onPress={() => selectAgeFilter('40s')}
+            >
+              <Text style={[styles.dropdownRowText, ageFilter === '40s' && styles.dropdownRowTextActive]}>
+                40대
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.dropdownRow, ageFilter === '50s' && styles.dropdownRowActive]}
+              onPress={() => selectAgeFilter('50s')}
+            >
+              <Text style={[styles.dropdownRowText, ageFilter === '50s' && styles.dropdownRowTextActive]}>
+                50대+
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableWithoutFeedback>
+      )}
+
       <FlatList
         data={sortedContacts}
         renderItem={renderUser}
@@ -263,7 +700,7 @@ const styles = StyleSheet.create({
     paddingTop: 50,
     paddingHorizontal: 20,
     paddingBottom: 20,
-    backgroundColor: '#4C6EF5',
+    backgroundColor: '#1F2937',
     borderBottomLeftRadius: 24,
     borderBottomRightRadius: 24,
   },
@@ -278,6 +715,74 @@ const styles = StyleSheet.create({
   subtitle: {
     fontSize: 14,
     color: 'rgba(255,255,255,0.9)',
+  },
+  dropdownOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'transparent',
+    zIndex: 5,
+  },
+  filterWrapper: {
+    backgroundColor: '#FFFFFF',
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E5E7EB',
+    paddingHorizontal: 20,
+    zIndex: 6,
+  },
+  filterBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  filterBarItem: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 6,
+  },
+  filterBarLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#5F6B8A',
+    letterSpacing: 0.2,
+  },
+  filterBarLabelActive: {
+    color: '#1F2937',
+  },
+  filterBarDivider: {
+    width: 1,
+    height: 14,
+    backgroundColor: '#D7DBEF',
+  },
+  dropdownPanel: {
+    position: 'absolute',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 6,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    overflow: 'hidden',
+    zIndex: 8,
+  },
+  dropdownRow: {
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+    backgroundColor: '#fff',
+  },
+  dropdownRowActive: {
+    backgroundColor: 'rgba(31, 41, 55, 0.12)',
+  },
+  dropdownRowText: {
+    fontSize: 15,
+    fontWeight: '500',
+    color: '#344054',
+  },
+  dropdownRowTextActive: {
+    color: '#1F2937',
+    fontWeight: '600',
   },
   listContent: {
     paddingTop: 0,

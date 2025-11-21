@@ -12,11 +12,12 @@ import {
   Pressable,
   Image,
 } from 'react-native';
-import { RouteProp, useRoute, useNavigation } from '@react-navigation/native';
+import { RouteProp, useRoute, useNavigation, useFocusEffect } from '@react-navigation/native';
 import { RootStackParamList } from '../navigation/types';
 import { useChat } from '../context/ChatContext';
 import { Message, ReportReason } from '../types';
 import { firebaseFirestoreService } from '../services/FirebaseFirestoreService';
+import { performanceMonitor } from '../utils/PerformanceMonitor';
 
 type ChatRouteProp = RouteProp<RootStackParamList, 'Chat'>;
 
@@ -30,7 +31,7 @@ const formatTime = (timestamp: number): string => {
 
 // 아바타 색상 생성 함수
 const getAvatarColor = (id: string) => {
-  const colors = ['#4C6EF5', '#FF6B6B', '#4ECDC4', '#A29BFE', '#FFD93D', '#6C5CE7'];
+  const colors = ['#1F2937', '#FF6B6B', '#4ECDC4', '#1F2937', '#FFD93D', '#1F2937'];
   return colors[id.length % colors.length];
 };
 
@@ -43,11 +44,29 @@ export default function ChatScreen() {
   const { params } = useRoute<ChatRouteProp>();
   const navigation = useNavigation();
   const { chatRoomId, partner } = params;
-  const { getMessages, sendMessage, markAsRead, currentUser, blockUser, reportUser, isBlocked, contacts } = useChat();
+  const { getMessages, sendMessage, markAsRead, currentUser, blockUser, reportUser, isBlocked, contacts, setCurrentChatRoomId } = useChat();
   const [text, setText] = useState('');
   const flatListRef = useRef<FlatList<Message>>(null);
   const [firestoreMessages, setFirestoreMessages] = useState<Message[]>([]);
   const unsubscribeMessagesRef = useRef<(() => void) | null>(null);
+
+  // 성능 측정: 화면 포커스 시
+  useFocusEffect(
+    React.useCallback(() => {
+      performanceMonitor.startScreenLoad('ChatScreen');
+      return () => {
+        performanceMonitor.endScreenLoad('ChatScreen');
+      };
+    }, [])
+  );
+
+  // 현재 채팅방 ID 설정 (알림 방지용)
+  useEffect(() => {
+    setCurrentChatRoomId(chatRoomId);
+    return () => {
+      setCurrentChatRoomId(null);
+    };
+  }, [chatRoomId, setCurrentChatRoomId]);
 
   // Firestore에서 메시지 실시간 구독
   useEffect(() => {
@@ -74,10 +93,12 @@ export default function ChatScreen() {
 
   // Firestore 메시지가 있으면 사용, 없으면 로컬 메시지 사용
   const messages = useMemo(() => {
-    if (firestoreMessages.length > 0) {
-      return firestoreMessages;
-    }
-    return getMessages(chatRoomId);
+    let msgs = firestoreMessages.length > 0 ? firestoreMessages : getMessages(chatRoomId);
+    // 중복 제거: 같은 ID를 가진 메시지가 여러 개 있으면 첫 번째만 유지
+    const uniqueMessages = msgs.filter((msg, index, self) =>
+      index === self.findIndex((m) => m.id === msg.id)
+    );
+    return uniqueMessages;
   }, [firestoreMessages, getMessages, chatRoomId]);
 
   useEffect(() => {
@@ -241,8 +262,20 @@ export default function ChatScreen() {
                   },
                 },
               ]);
-            } catch (error) {
+            } catch (error: any) {
               console.error('채팅방 삭제 실패:', error);
+              // 권한 오류나 이미 삭제된 경우는 성공으로 처리
+              if (error.code === 'permission-denied' || error.code === 'not-found') {
+                Alert.alert('삭제 완료', '채팅방이 삭제되었습니다.', [
+                  {
+                    text: '확인',
+                    onPress: () => {
+                      navigation.goBack();
+                    },
+                  },
+                ]);
+                return;
+              }
               Alert.alert('오류', '채팅방 삭제에 실패했습니다.');
             }
           },
@@ -288,7 +321,7 @@ export default function ChatScreen() {
             ]}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
-            <Text style={{ fontSize: 20, color: '#4C6EF5', fontWeight: '600' }}>⋯</Text>
+            <Text style={{ fontSize: 20, color: '#1F2937', fontWeight: '600' }}>⋯</Text>
           </Pressable>
         </View>
       ),
@@ -424,7 +457,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   myBubble: {
-    backgroundColor: '#4C6EF5',
+    backgroundColor: '#1F2937',
     borderBottomRightRadius: 6,
   },
   partnerBubble: {
@@ -471,7 +504,7 @@ const styles = StyleSheet.create({
     marginRight: 10,
   },
   sendButton: {
-    backgroundColor: '#4C6EF5',
+    backgroundColor: '#1F2937',
     borderRadius: 20,
     paddingHorizontal: 20,
     paddingVertical: 12,

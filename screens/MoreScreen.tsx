@@ -5,6 +5,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useChat } from '../context/ChatContext';
 import { RootStackParamList } from '../navigation/types';
 import { firebaseAuthService } from '../services/FirebaseAuthService';
+import { performanceMonitor } from '../utils/PerformanceMonitor';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -16,8 +17,13 @@ export default function MoreScreen() {
   // 화면에 포커스가 올 때마다 날짜 확인 (00시 지났는지 체크)
   useFocusEffect(
     React.useCallback(() => {
+      // 성능 측정 시작
+      performanceMonitor.startScreenLoad('MoreScreen');
       // 화면이 포커스될 때마다 날짜 확인을 위해 리렌더링 트리거
       setRefreshKey(prev => prev + 1);
+      return () => {
+        performanceMonitor.endScreenLoad('MoreScreen');
+      };
     }, [])
   );
 
@@ -152,9 +158,6 @@ export default function MoreScreen() {
                 <Text style={[styles.menuText, styles.attendanceText]}>출석체크</Text>
                 <Text style={styles.attendanceSubtext}>50포인트 받기</Text>
               </View>
-              <View style={styles.attendanceButton}>
-                <Text style={styles.attendanceButtonText}>체크</Text>
-              </View>
             </TouchableOpacity>
           )}
           <TouchableOpacity
@@ -178,15 +181,31 @@ export default function MoreScreen() {
             <Text style={styles.menuText}>차단한 회원</Text>
             <Text style={styles.menuArrow}>›</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.menuItem}>
+          <TouchableOpacity 
+            style={styles.menuItem}
+            onPress={() => navigation.navigate('NotificationSettings')}
+          >
             <Text style={styles.menuText}>알림 설정</Text>
             <Text style={styles.menuArrow}>›</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.menuItem}>
+          <TouchableOpacity 
+            style={styles.menuItem}
+            onPress={() => navigation.navigate('NotificationTest')}
+          >
+            <Text style={styles.menuText}>알림 테스트</Text>
+            <Text style={styles.menuArrow}>›</Text>
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={styles.menuItem}
+            onPress={() => navigation.navigate('PrivacyPolicy')}
+          >
             <Text style={styles.menuText}>개인정보 처리방침</Text>
             <Text style={styles.menuArrow}>›</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.menuItem}>
+          <TouchableOpacity 
+            style={styles.menuItem}
+            onPress={() => navigation.navigate('TermsOfService')}
+          >
             <Text style={styles.menuText}>이용약관</Text>
             <Text style={styles.menuArrow}>›</Text>
           </TouchableOpacity>
@@ -236,7 +255,7 @@ const styles = StyleSheet.create({
     paddingTop: 50,
     paddingHorizontal: 20,
     paddingBottom: 20,
-    backgroundColor: '#4C6EF5',
+    backgroundColor: '#1F2937',
     borderBottomLeftRadius: 24,
     borderBottomRightRadius: 24,
   },
@@ -290,7 +309,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   deleteText: {
-    color: '#F04438',
+    color: '#DC2626',
     fontWeight: '600',
   },
   attendanceItem: {
@@ -304,18 +323,18 @@ const styles = StyleSheet.create({
   attendanceText: {
     fontSize: 17,
     fontWeight: '600',
-    color: '#4C6EF5',
+    color: '#1F2937',
     marginBottom: 4,
   },
   attendanceSubtext: {
     fontSize: 13,
-    color: '#667085',
+    color: '#1F2937',
   },
   attendanceButton: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#4C6EF5',
+    backgroundColor: '#1F2937',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -331,7 +350,7 @@ const styles = StyleSheet.create({
     color: '#9CA3AF',
   },
   badge: {
-    backgroundColor: '#F04438',
+    backgroundColor: '#DC2626',
     borderRadius: 10,
     minWidth: 20,
     height: 20,

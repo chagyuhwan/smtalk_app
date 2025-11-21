@@ -1,9 +1,10 @@
-import React, { createContext, useContext, useMemo, useState, useCallback, ReactNode, useEffect } from 'react';
-import { Alert } from 'react-native';
-import { ChatRoom, Message, User, Post, Gender, Location, ReportReason, Report, BDSMPreference, Region } from '../types';
+import React, { createContext, useContext, useMemo, useState, useCallback, ReactNode, useEffect, useRef } from 'react';
+import { Alert, AppState, AppStateStatus } from 'react-native';
+import { ChatRoom, Message, User, Post, Gender, Location, ReportReason, Report, BDSMPreference, Region, NotificationSettings } from '../types';
 import { firebaseFirestoreService } from '../services/FirebaseFirestoreService';
 import { firebaseStorageService } from '../services/FirebaseStorageService';
 import { firebaseAuthService } from '../services/FirebaseAuthService';
+import { notificationService } from '../services/NotificationService';
 import { auth } from '../config/firebase';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import { getLocationFromRegion, REGION_COORDINATES } from '../utils/regions';
@@ -22,11 +23,12 @@ interface ChatContextType {
   getMessages: (chatRoomId: string) => Message[];
   getChatPartner: (chatRoomId: string) => User | undefined;
   markAsRead: (chatRoomId: string) => void;
+  setCurrentChatRoomId: (chatRoomId: string | null) => void;
   createPost: (content: string, images?: string[]) => Promise<void>;
   startChatFromPost: (postId: string) => Promise<string | null>;
   deductPoints: (amount: number) => Promise<boolean>;
   addPoints: (amount: number) => Promise<void>;
-  updateProfile: (name: string, gender?: Gender, avatar?: string, age?: number, bdsmPreference?: BDSMPreference, bio?: string) => void;
+  updateProfile: (name: string, gender?: Gender, avatar?: string, age?: number, bdsmPreference?: BDSMPreference[], bio?: string) => void;
   updateRegion: (region: Region) => void;
   getDistance: (user1: User, user2: User) => number | null;
   formatDistance: (distance: number | null) => string;
@@ -42,6 +44,14 @@ interface ChatContextType {
   cancelAccountDeletion: () => Promise<void>; // 회원탈퇴 취소
   checkAttendance: () => Promise<boolean>; // 출석체크
   canCheckAttendance: () => boolean; // 출석체크 가능 여부 확인
+  likeUser: (userId: string) => Promise<void>; // 사용자 좋아요
+  unlikeUser: (userId: string) => Promise<void>; // 사용자 좋아요 취소
+  isLiked: (userId: string) => boolean; // 좋아요 상태 확인
+  pinChatRoom: (roomId: string) => Promise<void>; // 채팅방 고정
+  unpinChatRoom: (roomId: string) => Promise<void>; // 채팅방 고정 해제
+  isPinned: (roomId: string) => boolean; // 채팅방 고정 상태 확인
+  notificationSettings: NotificationSettings | null; // 알림 설정
+  updateNotificationSettings: (settings: NotificationSettings) => void; // 알림 설정 업데이트
 }
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
@@ -71,9 +81,10 @@ const createInitialState = () => {
 export const ChatProvider = ({ children }: { children: ReactNode }) => {
   const [currentUser, setCurrentUser] = useState<User>(DEFAULT_USER);
   const [contacts, setContacts] = useState<User[]>([]); // Firestore에서 로드
-  const [points, setPoints] = useState<number>(1000); // 초기 포인트 1000
+  const [points, setPoints] = useState<number>(100); // 초기 포인트 100
   const [blockedUsers, setBlockedUsers] = useState<Record<string, number>>({}); // 차단된 사용자 목록 (userId -> blockedAt timestamp)
   const [reports, setReports] = useState<Report[]>([]); // 신고 목록
+  const [notificationSettings, setNotificationSettings] = useState<NotificationSettings | null>(null); // 알림 설정
 
   const { initialRooms, initialMessages } = useMemo(() => createInitialState(), []);
   const [chatRooms, setChatRooms] = useState<ChatRoom[]>(initialRooms);
@@ -81,8 +92,13 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
   
   // 게시글은 Firestore에서 실시간으로 로드
   const [posts, setPosts] = useState<Post[]>([]);
+  
+  // 현재 열려있는 채팅방 ID 추적 (알림 표시 방지용)
+  const currentChatRoomIdRef = useRef<string | null>(null);
+  // 이전 메시지 타임스탬프 추적 (중복 알림 방지)
+  const lastMessageTimestampsRef = useRef<Record<string, number>>({});
 
-  // 앱 시작 시 기본 지역(서울) 설정
+  // 앱 시작 시 기본 지역(서울) 설정 및 알림 권한 요청
   useEffect(() => {
     // 기본 지역이 이미 설정되어 있으면 스킵
     if (currentUser.region) {
@@ -95,7 +111,30 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       region: DEFAULT_REGION,
       location: DEFAULT_LOCATION,
     }));
+    
+    // 알림 권한 요청 및 푸시 토큰 등록
+    (async () => {
+      await notificationService.requestPermissions();
+      // 로그인 상태일 때만 푸시 토큰 등록
+      if (auth.currentUser) {
+        await notificationService.registerForPushNotifications();
+      }
+    })();
   }, []); // 최초 한 번만 실행
+  
+  // 앱 상태 변경 감지 (포그라운드/백그라운드)
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
+      if (nextAppState === 'active') {
+        // 앱이 포그라운드로 돌아오면 배지 초기화
+        notificationService.clearBadge();
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, []);
 
   // Firebase에서 게시글 실시간 로드
   useEffect(() => {
@@ -199,8 +238,23 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
         setMessages({});
         setBlockedUsers({});
         setReports([]);
+        // 푸시 토큰 제거
+        notificationService.unregisterPushToken().catch((error) => {
+          console.error('푸시 토큰 제거 실패:', error);
+        });
+        // Error Reporting: 사용자 ID 제거
+        import('../services/ErrorReportingService').then(({ errorReportingService }) => {
+          errorReportingService.setUserId(null);
+        }).catch((error) => {
+          console.error('Error Reporting 사용자 ID 제거 실패:', error);
+        });
         return;
       }
+
+      // 로그인 시 푸시 토큰 등록
+      notificationService.registerForPushNotifications().catch((error) => {
+        console.error('푸시 토큰 등록 실패:', error);
+      });
 
       // Firestore에서 사용자 정보 실시간 구독
       console.log('=== 현재 사용자 실시간 구독 시작 ===');
@@ -208,8 +262,22 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       
       unsubscribeUser = firebaseFirestoreService.subscribeToUser(
         firebaseUser.uid,
-        (userData, userPoints, blockedUsersData) => {
-          if (userData) {
+        async (userData, userPoints, blockedUsersData) => {
+            if (userData) {
+            // Analytics: 로그인 및 사용자 설정
+            const { analyticsService } = await import('../services/AnalyticsService');
+            analyticsService.setUserId(firebaseUser.uid);
+            analyticsService.setUserProperty('gender', userData.gender || null);
+            analyticsService.setUserProperty('region', userData.region || null);
+            if (userData.age) {
+              const ageGroup = userData.age < 30 ? '20s' : userData.age < 40 ? '30s' : userData.age < 50 ? '40s' : '50s+';
+              analyticsService.setUserProperty('age_group', ageGroup);
+            }
+            
+            // Error Reporting: 사용자 ID 설정
+            const { errorReportingService } = await import('../services/ErrorReportingService');
+            errorReportingService.setUserId(firebaseUser.uid);
+            
             // Firestore에서 가져온 사용자 정보로 업데이트
             console.log('사용자 정보 실시간 업데이트:', userData.name);
             console.log('사용자 위치 정보:', userData.location);
@@ -221,6 +289,24 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
             if (blockedUsersData) {
               setBlockedUsers(blockedUsersData);
             }
+
+            // 알림 설정 불러오기
+            (async () => {
+              try {
+                const settings = await firebaseFirestoreService.getNotificationSettings(firebaseUser.uid);
+                if (settings) {
+                  setNotificationSettings({
+                    enabled: settings.enabled,
+                    messages: settings.messages,
+                    likes: settings.likes,
+                    reports: settings.reports,
+                    updatedAt: settings.updatedAt,
+                  });
+                }
+              } catch (error) {
+                console.error('알림 설정 불러오기 실패:', error);
+              }
+            })();
             
             // region이 없으면 기본값으로 설정하고 Firestore에 저장
             const finalRegion = userData.region || DEFAULT_REGION;
@@ -242,7 +328,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
                     longitude: finalLocation.longitude,
                     region: finalRegion,
                     isAdmin: userData.isAdmin || false,
-                    points: userPoints !== undefined ? userPoints : 1000,
+                    points: userPoints !== undefined ? userPoints : 100,
                   });
                   console.log('기본 지역 정보 Firestore 저장 성공:', finalRegion);
                 } catch (error) {
@@ -359,7 +445,59 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
         firebaseUser.uid,
         (rooms) => {
           console.log('채팅방 실시간 업데이트:', rooms.length, '개');
-          setChatRooms(rooms);
+          // 중복 제거: 같은 ID를 가진 채팅방이 여러 개 있으면 첫 번째만 유지
+          const uniqueRooms = rooms.filter((room, index, self) =>
+            index === self.findIndex((r) => r.id === room.id)
+          );
+          
+          // 새 메시지 알림 처리
+          uniqueRooms.forEach((room) => {
+            if (room.lastMessage && room.lastMessage.receiverId === firebaseUser.uid) {
+              const lastTimestamp = lastMessageTimestampsRef.current[room.id] || 0;
+              const messageTimestamp = room.lastMessage.timestamp;
+              
+              // 새 메시지이고, 현재 열려있는 채팅방이 아닐 때만 알림 표시
+              // 앱이 백그라운드이거나 포그라운드이지만 다른 화면에 있을 때 알림 표시
+              if (
+                messageTimestamp > lastTimestamp &&
+                room.id !== currentChatRoomIdRef.current
+              ) {
+                // 발신자 정보 찾기
+                const senderId = room.lastMessage.senderId;
+                const sender = contacts.find((c) => c.id === senderId) || 
+                              room.participantsInfo?.find((p) => p.id === senderId);
+                
+                if (sender && !isBlocked(senderId)) {
+                  // 알림 설정 확인
+                  const settings = notificationSettings || {
+                    enabled: true,
+                    messages: true,
+                    likes: true,
+                    reports: true,
+                    updatedAt: Date.now(),
+                  };
+
+                  // 알림이 켜져있고 메시지 알림이 활성화되어 있을 때만 알림 표시
+                  if (settings.enabled && settings.messages) {
+                    // 앱이 백그라운드일 때만 푸시 알림 표시
+                    // 포그라운드일 때는 인앱 알림은 표시하지 않음 (UI에서 이미 표시됨)
+                    if (AppState.currentState !== 'active') {
+                      notificationService.showMessageNotification(
+                        sender.name,
+                        room.lastMessage.text,
+                        room.id
+                      );
+                    }
+                  }
+                }
+              }
+              
+              // 타임스탬프 업데이트
+              lastMessageTimestampsRef.current[room.id] = messageTimestamp;
+            }
+          });
+          
+          setChatRooms(uniqueRooms);
         }
       );
     });
@@ -439,6 +577,10 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       setChatRooms((prev) => [newRoom, ...prev]);
       setMessages((prev) => ({ ...prev, [newRoom.id]: [] }));
 
+      // Analytics: 채팅 시작
+      const { analyticsService } = await import('../services/AnalyticsService');
+      analyticsService.logChatStarted(user.id);
+
       return roomId;
     } catch (error) {
       console.error('채팅방 생성 실패:', error);
@@ -459,6 +601,15 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
   const sendMessage = useCallback(async (chatRoomId: string, text: string) => {
     const trimmedText = text.trim();
     if (!trimmedText) return;
+
+    // 콘텐츠 필터링
+    const { contentFilterService } = await import('../services/ContentFilterService');
+    const filterResult = contentFilterService.filterMessage(trimmedText);
+    
+    if (!filterResult.passed) {
+      Alert.alert('메시지 전송 불가', filterResult.reason || '부적절한 내용이 포함되어 있습니다.');
+      return;
+    }
 
     const firebaseUser = auth.currentUser;
     if (!firebaseUser) {
@@ -545,8 +696,15 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
             return updated;
           });
         }
-      } catch (error) {
+      } catch (error: any) {
         console.error('채팅방 확인/생성 실패:', error);
+        // 에러 리포팅
+        const { errorReportingService } = await import('../services/ErrorReportingService');
+        errorReportingService.logError(error, { 
+          context: 'sendMessage - chatRoom creation',
+          chatRoomId,
+          userId: firebaseUser.uid,
+        }, firebaseUser.uid);
         Alert.alert('오류', '채팅방을 생성할 수 없습니다. 다시 시도해주세요.');
         return;
       }
@@ -565,6 +723,10 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
 
     try {
       // Firestore에 메시지 저장 (DB에 영구 저장)
+      // Analytics: 메시지 전송
+      const { analyticsService } = await import('../services/AnalyticsService');
+      analyticsService.logMessageSent(chatRoomId);
+
       const messageId = await firebaseFirestoreService.sendMessage({
         chatRoomId,
         senderId: firebaseUser.uid,
@@ -620,6 +782,17 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
         message: error.message,
         chatRoomId: chatRoomId,
       });
+      
+      // 에러 리포팅
+      const firebaseUser = auth.currentUser;
+      if (firebaseUser) {
+        const { errorReportingService } = await import('../services/ErrorReportingService');
+        errorReportingService.logError(error, { 
+          context: 'sendMessage - final catch',
+          chatRoomId,
+          userId: firebaseUser.uid,
+        }, firebaseUser.uid);
+      }
       
       // 사용자에게 에러 알림
       Alert.alert(
@@ -744,6 +917,14 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
   }, [points, currentUser.name]);
 
   const createPost = useCallback(async (content: string, images?: string[]) => {
+    // 콘텐츠 필터링
+    const { contentFilterService } = await import('../services/ContentFilterService');
+    const filterResult = contentFilterService.filterPost(content.trim());
+    
+    if (!filterResult.passed) {
+      throw new Error(filterResult.reason || '부적절한 내용이 포함되어 있습니다.');
+    }
+
     const firebaseUser = auth.currentUser;
     if (!firebaseUser) {
       console.error('로그인이 필요합니다.');
@@ -807,6 +988,10 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
 
       console.log('게시글 생성 완료:', postId);
       
+      // Analytics: 게시글 작성
+      const { analyticsService } = await import('../services/AnalyticsService');
+      analyticsService.logPostCreated(imageUrls.length > 0);
+      
       // 게시글 작성 시 작성자를 연락처에 추가 (위치 정보 포함)
       if (currentUser.location) {
         ensureContact({
@@ -824,6 +1009,14 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
         message: error.message,
         stack: error.stack,
       });
+      
+      // 에러 리포팅
+      const { errorReportingService } = await import('../services/ErrorReportingService');
+      errorReportingService.logError(error, { 
+        context: 'createPost',
+        userId: firebaseUser.uid,
+        hasImages: images && images.length > 0,
+      }, firebaseUser.uid);
       
       // 에러 메시지 개선
       let errorMessage = '게시글 등록에 실패했습니다.';
@@ -873,7 +1066,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     }
   }, [posts, points, currentUser.id, contacts, createOrOpenChat, deductPoints]);
 
-  const updateProfile = useCallback(async (name: string, gender?: Gender, avatar?: string, age?: number, bdsmPreference?: BDSMPreference, bio?: string) => {
+  const updateProfile = useCallback(async (name: string, gender?: Gender, avatar?: string, age?: number, bdsmPreference?: BDSMPreference[], bio?: string) => {
     const firebaseUser = auth.currentUser;
     if (!firebaseUser) {
       console.error('로그인이 필요합니다.');
@@ -906,7 +1099,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
         longitude?: number;
         isAdmin?: boolean;
         points?: number;
-        bdsmPreference?: BDSMPreference;
+        bdsmPreference?: BDSMPreference[];
         bio?: string;
       } = {
         id: firebaseUser.uid,
@@ -1164,6 +1357,10 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       setReports((prev) => [...prev, newReport]);
       
       console.log('게시글 신고 완료:', reportId);
+      
+      // Analytics: 게시글 신고
+      const { analyticsService } = await import('../services/AnalyticsService');
+      analyticsService.logPostReported(postId, reason);
     } catch (error) {
       console.error('신고 전송 실패:', error);
     }
@@ -1354,6 +1551,165 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     }
   }, [currentUser.name, addPoints, canCheckAttendance, getKoreaDateString]);
 
+  // 현재 채팅방 ID 설정 함수
+  const setCurrentChatRoomId = useCallback((chatRoomId: string | null) => {
+    currentChatRoomIdRef.current = chatRoomId;
+  }, []);
+
+  // 좋아요 추가
+  const likeUser = useCallback(async (userId: string) => {
+    try {
+      if (!auth.currentUser) {
+        Alert.alert('오류', '로그인이 필요합니다.');
+        return;
+      }
+
+      if (userId === currentUser.id) {
+        Alert.alert('오류', '자기 자신에게 좋아요를 누를 수 없습니다.');
+        return;
+      }
+
+      await firebaseFirestoreService.likeUser(auth.currentUser.uid, userId);
+      
+      // 좋아요 받은 사용자에게 알림 (백그라운드일 때만)
+      if (AppState.currentState !== 'active') {
+        const settings = await firebaseFirestoreService.getNotificationSettings(userId);
+        if (settings && settings.enabled && settings.likes) {
+          notificationService.showLikeNotification(currentUser.name, auth.currentUser.uid, userId);
+        }
+      }
+    } catch (error: any) {
+      console.error('좋아요 추가 오류:', error);
+      Alert.alert('오류', error.message || '좋아요 추가에 실패했습니다.');
+    }
+  }, [currentUser.id, currentUser.name]);
+
+  // 좋아요 제거
+  const unlikeUser = useCallback(async (userId: string) => {
+    try {
+      if (!auth.currentUser) {
+        Alert.alert('오류', '로그인이 필요합니다.');
+        return;
+      }
+
+      if (userId === currentUser.id) {
+        return;
+      }
+
+      await firebaseFirestoreService.unlikeUser(auth.currentUser.uid, userId);
+    } catch (error: any) {
+      console.error('좋아요 제거 오류:', error);
+      Alert.alert('오류', error.message || '좋아요 제거에 실패했습니다.');
+    }
+  }, [currentUser.id]);
+
+  // 좋아요 상태 확인
+  const isLiked = useCallback((userId: string): boolean => {
+    if (!auth.currentUser || userId === currentUser.id) {
+      return false;
+    }
+
+    // contacts에서 해당 사용자를 찾아서 likedBy 필드 확인
+    const user = contacts.find((u) => u.id === userId);
+    if (!user || !user.likedBy) {
+      return false;
+    }
+
+    return !!user.likedBy[auth.currentUser.uid];
+  }, [contacts, currentUser.id]);
+
+  // 채팅방 고정
+  const pinChatRoom = useCallback(async (roomId: string) => {
+    try {
+      if (!auth.currentUser) {
+        Alert.alert('오류', '로그인이 필요합니다.');
+        return;
+      }
+
+      await firebaseFirestoreService.pinChatRoom(roomId, auth.currentUser.uid);
+    } catch (error: any) {
+      console.error('채팅방 고정 오류:', error);
+      Alert.alert('오류', error.message || '채팅방 고정에 실패했습니다.');
+    }
+  }, []);
+
+  // 채팅방 고정 해제
+  const unpinChatRoom = useCallback(async (roomId: string) => {
+    try {
+      if (!auth.currentUser) {
+        Alert.alert('오류', '로그인이 필요합니다.');
+        return;
+      }
+
+      await firebaseFirestoreService.unpinChatRoom(roomId, auth.currentUser.uid);
+    } catch (error: any) {
+      console.error('채팅방 고정 해제 오류:', error);
+      Alert.alert('오류', error.message || '채팅방 고정 해제에 실패했습니다.');
+    }
+  }, []);
+
+  // 채팅방 고정 상태 확인
+  const isPinned = useCallback((roomId: string): boolean => {
+    if (!auth.currentUser) {
+      return false;
+    }
+
+    const room = chatRooms.find((r) => r.id === roomId);
+    if (!room || !room.pinnedBy) {
+      return false;
+    }
+
+    return !!room.pinnedBy[auth.currentUser.uid];
+  }, [chatRooms]);
+
+  // 알림 설정 업데이트
+  const updateNotificationSettings = useCallback((settings: NotificationSettings) => {
+    setNotificationSettings(settings);
+  }, []);
+
+  // 좋아요 알림 감지 (현재 사용자의 좋아요 수 변화 감지)
+  const previousLikeCountRef = useRef<number>(currentUser.likeCount || 0);
+  const previousLikedByRef = useRef<Record<string, number>>(currentUser.likedBy || {});
+
+  useEffect(() => {
+    if (!currentUser.id || !auth.currentUser) return;
+
+    const currentLikeCount = currentUser.likeCount || 0;
+    const currentLikedBy = currentUser.likedBy || {};
+
+    // 새로 좋아요가 추가되었는지 확인
+    if (currentLikeCount > previousLikeCountRef.current) {
+      // 새로 추가된 좋아요 찾기
+      const newLikers = Object.keys(currentLikedBy).filter(
+        (likerId) => !previousLikedByRef.current[likerId]
+      );
+
+      if (newLikers.length > 0) {
+        // 알림 설정 확인
+        const settings = notificationSettings || {
+          enabled: true,
+          messages: true,
+          likes: true,
+          reports: true,
+          updatedAt: Date.now(),
+        };
+
+        if (settings.enabled && settings.likes && AppState.currentState !== 'active') {
+          // 새로 좋아요를 누른 사용자 정보 찾기
+          for (const likerId of newLikers) {
+            const liker = contacts.find((c) => c.id === likerId);
+            if (liker) {
+              notificationService.showLikeNotification(liker.name, likerId, currentUser.id);
+            }
+          }
+        }
+      }
+    }
+
+    previousLikeCountRef.current = currentLikeCount;
+    previousLikedByRef.current = currentLikedBy;
+  }, [currentUser.likeCount, currentUser.likedBy, contacts, notificationSettings, currentUser.id]);
+
   const value: ChatContextType = useMemo(
     () => ({
       currentUser,
@@ -1369,6 +1725,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       getMessages,
       getChatPartner,
       markAsRead,
+      setCurrentChatRoomId,
       createPost,
       startChatFromPost,
       deductPoints,
@@ -1389,8 +1746,16 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       cancelAccountDeletion,
       checkAttendance,
       canCheckAttendance,
+      likeUser,
+      unlikeUser,
+      isLiked,
+      pinChatRoom,
+      unpinChatRoom,
+      isPinned,
+      notificationSettings,
+      updateNotificationSettings,
     }),
-    [currentUser, contacts, chatRooms, messages, points, posts, blockedUsers, reports, createOrOpenChat, sendMessage, getMessages, getChatPartner, markAsRead, createPost, startChatFromPost, deductPoints, addPoints, updateProfile, updateRegion, getDistance, formatDistance, blockUser, unblockUser, isBlocked, reportPost, reportUser, deletePost, deleteUser, updateReportStatus, requestAccountDeletion, cancelAccountDeletion, checkAttendance, canCheckAttendance]
+    [currentUser, contacts, chatRooms, messages, points, posts, blockedUsers, reports, notificationSettings, createOrOpenChat, sendMessage, getMessages, getChatPartner, markAsRead, setCurrentChatRoomId, createPost, startChatFromPost, deductPoints, addPoints, updateProfile, updateRegion, getDistance, formatDistance, blockUser, unblockUser, isBlocked, reportPost, reportUser, deletePost, deleteUser, updateReportStatus, requestAccountDeletion, cancelAccountDeletion, checkAttendance, canCheckAttendance, likeUser, unlikeUser, isLiked, pinChatRoom, unpinChatRoom, isPinned, updateNotificationSettings]
   );
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;

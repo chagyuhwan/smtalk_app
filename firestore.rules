@@ -8,6 +8,18 @@ service cloud.firestore {
       allow read: if request.auth != null;
       allow write: if request.auth != null && request.auth.uid == userId;
       
+      // 다른 사용자의 문서 업데이트 허용 (좋아요 기능)
+      // 중요한 필드들이 변경되지 않았는지 확인
+      allow update: if request.auth != null && 
+        request.auth.uid != userId &&
+        // 필수 필드들이 변경되지 않았는지 확인
+        request.resource.data.id == resource.data.id &&
+        request.resource.data.name == resource.data.name &&
+        request.resource.data.phoneNumber == resource.data.phoneNumber &&
+        // 보안상 중요한 필드들이 변경되지 않았는지 확인
+        // 변경된 필드가 likeCount, likedBy, updatedAt만 포함하는지 확인
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likeCount', 'likedBy', 'updatedAt']);
+      
       // 관리자는 모든 사용자 정보를 읽고 쓸 수 있음
       allow read, write: if request.auth != null && 
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
@@ -145,6 +157,19 @@ service cloud.firestore {
       // 관리자만 문의를 삭제할 수 있음
       allow delete: if request.auth != null && 
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+    }
+    
+    // ==================== 에러 로그 (errorLogs) ====================
+    match /errorLogs/{errorId} {
+      // 모든 인증된 사용자는 에러 로그를 작성할 수 있음 (크래시 리포팅)
+      allow create: if request.auth != null;
+      
+      // 관리자만 에러 로그를 읽을 수 있음
+      allow read: if request.auth != null && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+      
+      // 에러 로그는 수정/삭제 불가 (읽기 전용)
+      allow update, delete: if false;
     }
   }
 }

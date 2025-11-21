@@ -8,18 +8,93 @@ import StarTalkScreen from '../screens/StarTalkScreen';
 import UsersScreen from '../screens/UsersScreen';
 import MoreScreen from '../screens/MoreScreen';
 import ProfileSettingsScreen from '../screens/ProfileSettingsScreen';
+import UserProfileScreen from '../screens/UserProfileScreen';
 import ChargeScreen from '../screens/ChargeScreen';
 import BlockedUsersScreen from '../screens/BlockedUsersScreen';
 import CustomerServiceScreen from '../screens/CustomerServiceScreen';
+import TermsOfServiceScreen from '../screens/TermsOfServiceScreen';
+import PrivacyPolicyScreen from '../screens/PrivacyPolicyScreen';
+import NotificationSettingsScreen from '../screens/NotificationSettingsScreen';
+import NotificationTestScreen from '../screens/NotificationTestScreen';
 import PhoneAuthScreen from '../screens/PhoneAuthScreen';
 import { RootStackParamList, MainTabParamList } from './types';
-import { Text, View, StyleSheet, ActivityIndicator } from 'react-native';
+import { Text, View, StyleSheet, ActivityIndicator, Image } from 'react-native';
 import { useChat } from '../context/ChatContext';
 import { auth } from '../config/firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
+import { notificationService } from '../services/NotificationService';
+import * as Notifications from 'expo-notifications';
+import { performanceMonitor } from '../utils/PerformanceMonitor';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
+
+// 홈 아이콘 컴포넌트 (PNG 이미지 사용)
+function HomeIcon({ color, focused }: { color: string; focused: boolean }) {
+  return (
+    <Image
+      source={require('../assets/home.png')}
+      style={[
+        iconStyles.image,
+        // 항상 색상 적용 (비활성일 때는 더 진하게)
+        { tintColor: color, opacity: focused ? 1 : 0.9 },
+      ]}
+      resizeMode="contain"
+    />
+  );
+}
+
+// 사용자 아이콘 컴포넌트 (PNG 이미지 사용)
+function UsersIcon({ color, focused }: { color: string; focused: boolean }) {
+  return (
+    <Image
+      source={require('../assets/usersList.png')}
+      style={[
+        iconStyles.image,
+        // 항상 색상 적용 (비활성일 때는 더 진하게)
+        { tintColor: color, opacity: focused ? 1 : 0.9 },
+      ]}
+      resizeMode="contain"
+    />
+  );
+}
+
+// 메시지 아이콘 컴포넌트 (PNG 이미지 사용)
+function MessageIcon({ color, focused }: { color: string; focused: boolean }) {
+  return (
+    <Image
+      source={require('../assets/messages.png')}
+      style={[
+        iconStyles.image,
+        // 항상 색상 적용 (비활성일 때는 더 진하게)
+        { tintColor: color, opacity: focused ? 1 : 0.9 },
+      ]}
+      resizeMode="contain"
+    />
+  );
+}
+
+// 프로필 아이콘 컴포넌트 (PNG 이미지 사용)
+function ProfileIcon({ color, focused }: { color: string; focused: boolean }) {
+  return (
+    <Image
+      source={require('../assets/profile.png')}
+      style={[
+        iconStyles.image,
+        // 항상 색상 적용 (비활성일 때는 더 진하게)
+        { tintColor: color, opacity: focused ? 1 : 0.9 },
+      ]}
+      resizeMode="contain"
+    />
+  );
+}
+
+const iconStyles = StyleSheet.create({
+  image: {
+    width: 32,
+    height: 32,
+  },
+});
 
 // 공통 네비게이션 스타일
 const commonStackOptions = {
@@ -39,14 +114,14 @@ const commonStackOptions = {
 // 탭 네비게이터 공통 옵션
 const tabNavigatorOptions = {
   headerShown: false,
-  tabBarActiveTintColor: '#4C6EF5',
+  tabBarActiveTintColor: '#1F2937',
   tabBarInactiveTintColor: '#8892B0',
   tabBarStyle: {
     backgroundColor: '#fff',
     borderTopWidth: 1,
     borderTopColor: '#E5E7EB',
     paddingTop: 8,
-    paddingBottom: 8,
+    paddingBottom: 4,
     height: 60,
   },
   tabBarLabelStyle: {
@@ -62,40 +137,32 @@ function MainTabs() {
         name="StarTalk"
         component={StarTalkScreen}
         options={{
-          tabBarLabel: '별톡',
-          tabBarIcon: ({ color }) => (
-            <Text style={{ fontSize: 20, color }}>⭐</Text>
-          ),
+          tabBarLabel: '',
+          tabBarIcon: ({ color, focused }) => <HomeIcon color={color} focused={focused} />,
         }}
       />
       <Tab.Screen
         name="Users"
         component={UsersScreen}
         options={{
-          tabBarLabel: '사용자',
-          tabBarIcon: ({ color }) => (
-            <Text style={{ fontSize: 20, color }}>👥</Text>
-          ),
+          tabBarLabel: '',
+          tabBarIcon: ({ color, focused }) => <UsersIcon color={color} focused={focused} />,
         }}
       />
       <Tab.Screen
         name="Messages"
         component={ChatListScreen}
         options={{
-          tabBarLabel: '메시지',
-          tabBarIcon: ({ color }) => (
-            <Text style={{ fontSize: 20, color }}>💬</Text>
-          ),
+          tabBarLabel: '',
+          tabBarIcon: ({ color, focused }) => <MessageIcon color={color} focused={focused} />,
         }}
       />
       <Tab.Screen
         name="More"
         component={MoreScreen}
         options={{
-          tabBarLabel: '더보기',
-          tabBarIcon: ({ color }) => (
-            <Text style={{ fontSize: 20, color }}>⋯</Text>
-          ),
+          tabBarLabel: '',
+          tabBarIcon: ({ color, focused }) => <ProfileIcon color={color} focused={focused} />,
         }}
       />
     </Tab.Navigator>
@@ -116,6 +183,7 @@ export default function AppNavigator() {
   const [isLoading, setIsLoading] = useState(true);
   const navigationRef = useRef<NavigationContainerRef<RootStackParamList>>(null);
   const prevAuthState = useRef<boolean | null>(null);
+  const { contacts, chatRooms, getChatPartner } = useChat();
 
   // 앱 시작 시 인증 상태 확인
   useEffect(() => {
@@ -142,6 +210,72 @@ export default function AppNavigator() {
     return () => unsubscribe();
   }, []);
 
+  // 알림 리스너 설정
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    notificationService.setupNotificationListeners(
+      // 알림 수신 시 (앱이 포그라운드일 때)
+      (notification: Notifications.Notification) => {
+        console.log('알림 수신:', notification);
+      },
+      // 알림 탭 시
+      (response: Notifications.NotificationResponse) => {
+        console.log('알림 탭:', response);
+        const data = response.notification.request.content.data;
+
+        // 메시지 알림인 경우 채팅방으로 이동
+        if (data?.chatRoomId && navigationRef.current) {
+          const chatRoomId = data.chatRoomId;
+          
+          // 채팅방이 존재하는지 확인
+          const chatRoom = chatRooms.find((room) => room.id === chatRoomId);
+          if (chatRoom) {
+            // 상대방 정보 가져오기
+            const partner = getChatPartner(chatRoomId);
+            if (partner) {
+              // 채팅방으로 직접 이동
+              navigationRef.current.navigate('Chat', {
+                chatRoomId,
+                partner,
+              });
+            } else {
+              // 상대방 정보를 찾을 수 없으면 메시지 목록으로 이동
+              navigationRef.current.navigate('MainTabs', {
+                screen: 'Messages',
+              });
+            }
+          } else {
+            // 채팅방이 아직 로드되지 않았으면 메시지 목록으로 이동
+            navigationRef.current.navigate('MainTabs', {
+              screen: 'Messages',
+            });
+          }
+        }
+
+        // 좋아요 알림인 경우 프로필로 이동
+        if (data?.type === 'like' && data?.likerId && navigationRef.current) {
+          // 좋아요를 누른 사용자 프로필로 이동
+          const liker = contacts.find((c) => c.id === data.likerId);
+          if (liker) {
+            navigationRef.current.navigate('UserProfile', {
+              user: liker,
+            });
+          } else {
+            // 사용자 정보를 찾을 수 없으면 사용자 목록으로 이동
+            navigationRef.current.navigate('MainTabs', {
+              screen: 'Users',
+            });
+          }
+        }
+      }
+    );
+
+    return () => {
+      notificationService.removeNotificationListeners();
+    };
+  }, [isAuthenticated, contacts, chatRooms, getChatPartner]);
+
   const chatScreenOptions = useCallback(
     ({ route }: { route: { params: RootStackParamList['Chat'] } }) => ({
       ...commonStackOptions,
@@ -153,7 +287,7 @@ export default function AppNavigator() {
   if (isLoading) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-        <ActivityIndicator size="large" color="#4C6EF5" />
+        <ActivityIndicator size="large" color="#1F2937" />
       </View>
     );
   }
@@ -193,6 +327,13 @@ export default function AppNavigator() {
           }}
         />
         <Stack.Screen
+          name="UserProfile"
+          component={UserProfileScreen}
+          options={{
+            headerShown: false,
+          }}
+        />
+        <Stack.Screen
           name="Charge"
           component={ChargeScreen}
           options={{
@@ -212,6 +353,38 @@ export default function AppNavigator() {
           component={CustomerServiceScreen}
           options={{
             title: '고객센터',
+            headerShown: false,
+          }}
+        />
+        <Stack.Screen
+          name="TermsOfService"
+          component={TermsOfServiceScreen}
+          options={{
+            title: '이용약관',
+            headerShown: false,
+          }}
+        />
+        <Stack.Screen
+          name="PrivacyPolicy"
+          component={PrivacyPolicyScreen}
+          options={{
+            title: '개인정보 처리방침',
+            headerShown: false,
+          }}
+        />
+        <Stack.Screen
+          name="NotificationSettings"
+          component={NotificationSettingsScreen}
+          options={{
+            title: '알림 설정',
+            headerShown: false,
+          }}
+        />
+        <Stack.Screen
+          name="NotificationTest"
+          component={NotificationTestScreen}
+          options={{
+            title: '알림 테스트',
             headerShown: false,
           }}
         />

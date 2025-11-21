@@ -198,6 +198,16 @@ class PaymentService {
             // 구매 완료 처리
             await RNIap.finishTransaction(purchase);
             
+            // Analytics: 포인트 충전
+            try {
+              const { analyticsService } = await import('./AnalyticsService');
+              // 상품 ID에서 포인트 금액 추정 (실제로는 상품 정보에서 가져와야 함)
+              const estimatedAmount = points * 10; // 예시: 1포인트 = 10원 가정
+              analyticsService.logPurchase(points, estimatedAmount, 'KRW');
+            } catch (error) {
+              console.error('Analytics 로깅 실패:', error);
+            }
+            
             // 콜백으로 포인트 추가 알림
             if (this.onPurchaseSuccess) {
               this.onPurchaseSuccess(points, purchase);

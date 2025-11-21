@@ -8,17 +8,28 @@ import {
   Animated,
   PanResponder,
   Alert,
+  Image,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useChat } from '../context/ChatContext';
 import { RootStackParamList } from '../navigation/types';
 import { ChatRoom } from '../types';
 import { firebaseFirestoreService } from '../services/FirebaseFirestoreService';
+import { performanceMonitor } from '../utils/PerformanceMonitor';
 
 const SWIPE_THRESHOLD = 80;
 
-const AVATAR_COLORS = ['#FF6B6B', '#4ECDC4', '#A29BFE', '#FFD93D', '#6C5CE7'];
+const AVATAR_COLORS = ['#FF6B6B', '#4ECDC4', '#1F2937', '#FFD93D', '#1F2937'];
+
+const getAvatarColor = (gender?: string, hasAvatar?: boolean) => {
+  // 프로필 사진이 없을 때 성별에 따라 색상 설정
+  if (!hasAvatar && gender) {
+    return gender === 'female' ? '#F3AAC2' : '#8FB5DF'; // 여자는 핑크, 남자는 연한 파란색
+  }
+  // 프로필 사진이 있거나 성별 정보가 없을 때는 기본 색상
+  return AVATAR_COLORS[0];
+};
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -40,16 +51,56 @@ const formatTime = (timestamp?: number): string => {
 
 export default function ChatListScreen() {
   const navigation = useNavigation<NavigationProp>();
-  const { currentUser, chatRooms, getChatPartner } = useChat();
+  const { currentUser, chatRooms, getChatPartner, pinChatRoom, unpinChatRoom, isPinned } = useChat();
+  
+  // 성능 측정: 화면 포커스 시
+  useFocusEffect(
+    React.useCallback(() => {
+      performanceMonitor.startScreenLoad('ChatListScreen');
+      return () => {
+        performanceMonitor.endScreenLoad('ChatListScreen');
+      };
+    }, [])
+  );
+  
   const [swipedRoomId, setSwipedRoomId] = useState<string | null>(null);
+  const [swipeDirection, setSwipeDirection] = useState<'left' | 'right' | null>(null);
 
   const sortedRooms = useMemo(() => {
-    return [...chatRooms].sort((a, b) => {
+    // 중복 제거: 같은 ID를 가진 채팅방이 여러 개 있으면 첫 번째만 유지
+    const uniqueRooms = chatRooms.filter((room, index, self) =>
+      index === self.findIndex((r) => r.id === room.id)
+    );
+    
+    // 고정된 대화와 일반 대화를 분리
+    const pinnedRooms: ChatRoom[] = [];
+    const unpinnedRooms: ChatRoom[] = [];
+    
+    uniqueRooms.forEach((room) => {
+      if (isPinned(room.id)) {
+        pinnedRooms.push(room);
+      } else {
+        unpinnedRooms.push(room);
+      }
+    });
+    
+    // 고정된 대화는 고정 시간 순으로 정렬 (최신 고정이 위로)
+    pinnedRooms.sort((a, b) => {
+      const aPinnedAt = a.pinnedBy?.[currentUser.id] || 0;
+      const bPinnedAt = b.pinnedBy?.[currentUser.id] || 0;
+      return bPinnedAt - aPinnedAt;
+    });
+    
+    // 일반 대화는 최신 메시지 시간 순으로 정렬
+    unpinnedRooms.sort((a, b) => {
       const aTime = a.lastMessage?.timestamp ?? 0;
       const bTime = b.lastMessage?.timestamp ?? 0;
       return bTime - aTime;
     });
-  }, [chatRooms]);
+    
+    // 고정된 대화를 먼저, 그 다음 일반 대화
+    return [...pinnedRooms, ...unpinnedRooms];
+  }, [chatRooms, currentUser.id, isPinned]);
 
   const handleDeleteRoom = useCallback(async (roomId: string) => {
     Alert.alert(
@@ -68,8 +119,13 @@ export default function ChatListScreen() {
               // Firestore에서 채팅방 삭제
               await firebaseFirestoreService.deleteChatRoom(roomId);
               setSwipedRoomId(null);
-            } catch (error) {
+            } catch (error: any) {
               console.error('채팅방 삭제 실패:', error);
+              // 권한 오류나 이미 삭제된 경우는 성공으로 처리
+              if (error.code === 'permission-denied' || error.code === 'not-found') {
+                setSwipedRoomId(null);
+                return;
+              }
               Alert.alert('오류', '채팅방 삭제에 실패했습니다.');
             }
           },
@@ -78,12 +134,98 @@ export default function ChatListScreen() {
     );
   }, []);
 
+  const handleDeleteAllRooms = useCallback(async () => {
+    if (sortedRooms.length === 0) {
+      Alert.alert('알림', '삭제할 채팅방이 없습니다.');
+      return;
+    }
+
+    // 고정되지 않은 채팅방만 필터링
+    const unpinnedRooms = sortedRooms.filter((room) => !isPinned(room.id));
+    const pinnedCount = sortedRooms.length - unpinnedRooms.length;
+
+    if (unpinnedRooms.length === 0) {
+      Alert.alert('알림', '삭제할 채팅방이 없습니다.\n고정된 채팅방은 제외됩니다.');
+      return;
+    }
+
+    const message = pinnedCount > 0
+      ? `고정되지 않은 채팅방 ${unpinnedRooms.length}개를 나가시겠습니까?\n고정된 채팅방 ${pinnedCount}개는 유지됩니다.\n\n삭제된 채팅은 복구할 수 없습니다.`
+      : `모든 채팅방(${unpinnedRooms.length}개)을 나가시겠습니까?\n삭제된 채팅은 복구할 수 없습니다.`;
+
+    Alert.alert(
+      '전체 나가기',
+      message,
+      [
+        {
+          text: '취소',
+          style: 'cancel',
+        },
+        {
+          text: '나가기',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              // 고정되지 않은 채팅방만 순차적으로 삭제 (에러가 발생해도 계속 진행)
+              let successCount = 0;
+              let failCount = 0;
+              
+              for (const room of unpinnedRooms) {
+                try {
+                  await firebaseFirestoreService.deleteChatRoom(room.id);
+                  successCount++;
+                  // 각 삭제 후 짧은 대기 (Firestore 업데이트 시간 확보)
+                  await new Promise(resolve => setTimeout(resolve, 100));
+                } catch (error: any) {
+                  console.warn(`채팅방 ${room.id} 삭제 실패:`, error);
+                  failCount++;
+                  // 권한 오류나 이미 삭제된 경우는 성공으로 간주
+                  if (error.code === 'permission-denied' || error.code === 'not-found') {
+                    successCount++;
+                    failCount--;
+                  }
+                }
+              }
+              
+              setSwipedRoomId(null);
+              setSwipeDirection(null);
+              
+              if (failCount === 0) {
+                const pinnedMessage = pinnedCount > 0
+                  ? `고정되지 않은 채팅방 ${successCount}개를 나갔습니다.\n고정된 채팅방 ${pinnedCount}개는 유지되었습니다.`
+                  : `모든 채팅방 ${successCount}개를 나갔습니다.`;
+                Alert.alert('완료', pinnedMessage);
+              } else {
+                const pinnedMessage = pinnedCount > 0
+                  ? `고정되지 않은 채팅방 ${successCount}개를 나갔습니다. (${failCount}개 실패)\n고정된 채팅방 ${pinnedCount}개는 유지되었습니다.`
+                  : `${successCount}개 채팅방을 나갔습니다. (${failCount}개 실패)`;
+                Alert.alert('완료', pinnedMessage);
+              }
+            } catch (error) {
+              console.error('전체 채팅방 삭제 실패:', error);
+              Alert.alert('오류', '일부 채팅방 삭제에 실패했습니다.');
+            }
+          },
+        },
+      ]
+    );
+  }, [sortedRooms, isPinned]);
+
+  const handlePinToggle = useCallback(async (roomId: string) => {
+    if (isPinned(roomId)) {
+      await unpinChatRoom(roomId);
+    } else {
+      await pinChatRoom(roomId);
+    }
+  }, [isPinned, pinChatRoom, unpinChatRoom]);
+
   const SwipeableRoom = useCallback(({ item }: { item: ChatRoom }) => {
     const partner = getChatPartner(item.id);
     if (!partner) return null;
 
     const initial = partner.name.charAt(0).toUpperCase();
     const translateX = useRef(new Animated.Value(0)).current;
+    const isPinnedRoom = isPinned(item.id);
 
     const panResponder = useRef(
       PanResponder.create({
@@ -94,6 +236,7 @@ export default function ChatListScreen() {
           // 다른 채팅방이 스와이프되어 있으면 닫기
           if (swipedRoomId && swipedRoomId !== item.id) {
             setSwipedRoomId(null);
+            setSwipeDirection(null);
           }
         },
         onPanResponderMove: (_, gestureState) => {
@@ -101,16 +244,29 @@ export default function ChatListScreen() {
             // 왼쪽으로 스와이프 (삭제 버튼 표시)
             const maxSwipe = -80;
             translateX.setValue(Math.max(gestureState.dx, maxSwipe));
+          } else if (gestureState.dx > 0) {
+            // 오른쪽으로 스와이프 (고정 버튼 표시)
+            const maxSwipe = 80;
+            translateX.setValue(Math.min(gestureState.dx, maxSwipe));
           }
         },
         onPanResponderRelease: (_, gestureState) => {
           if (gestureState.dx < -SWIPE_THRESHOLD) {
-            // 삭제 임계값을 넘으면 삭제 버튼 표시
+            // 왼쪽으로 스와이프 (삭제 버튼 표시)
             Animated.spring(translateX, {
               toValue: -80,
               useNativeDriver: true,
             }).start();
             setSwipedRoomId(item.id);
+            setSwipeDirection('left');
+          } else if (gestureState.dx > SWIPE_THRESHOLD) {
+            // 오른쪽으로 스와이프 (고정 버튼 표시)
+            Animated.spring(translateX, {
+              toValue: 80,
+              useNativeDriver: true,
+            }).start();
+            setSwipedRoomId(item.id);
+            setSwipeDirection('right');
           } else {
             // 원래 위치로 복귀
             Animated.spring(translateX, {
@@ -119,6 +275,7 @@ export default function ChatListScreen() {
             }).start();
             if (swipedRoomId === item.id) {
               setSwipedRoomId(null);
+              setSwipeDirection(null);
             }
           }
         },
@@ -137,22 +294,62 @@ export default function ChatListScreen() {
 
     const handleDeletePress = () => {
       handleDeleteRoom(item.id);
+      setSwipedRoomId(null);
+      setSwipeDirection(null);
     };
+
+    const handlePinPress = () => {
+      handlePinToggle(item.id);
+      Animated.spring(translateX, {
+        toValue: 0,
+        useNativeDriver: true,
+      }).start();
+      setSwipedRoomId(null);
+      setSwipeDirection(null);
+    };
+
+    const isSwiped = swipedRoomId === item.id;
+    const showDeleteButton = isSwiped && swipeDirection === 'left';
+    const showPinButton = isSwiped && swipeDirection === 'right';
 
     return (
       <View style={styles.swipeContainer}>
-        <View style={styles.deleteButtonContainer}>
-          <TouchableOpacity
-            style={styles.deleteButton}
-            onPress={handleDeletePress}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.deleteButtonText}>삭제</Text>
-          </TouchableOpacity>
-        </View>
+        {/* 왼쪽 고정 버튼 */}
+        {showPinButton && (
+          <View style={styles.pinButtonContainer}>
+            <TouchableOpacity
+              style={styles.pinButton}
+              onPress={handlePinPress}
+              activeOpacity={0.8}
+            >
+              <Image
+                source={require('../assets/pinicon.png')}
+                style={styles.pinButtonIcon}
+                resizeMode="contain"
+              />
+            </TouchableOpacity>
+          </View>
+        )}
+        {/* 오른쪽 삭제 버튼 */}
+        {showDeleteButton && (
+          <View style={styles.deleteButtonContainer}>
+            <TouchableOpacity
+              style={styles.deleteButton}
+              onPress={handleDeletePress}
+              activeOpacity={0.8}
+            >
+              <Image
+                source={require('../assets/deleteicon.png')}
+                style={styles.deleteButtonIcon}
+                resizeMode="contain"
+              />
+            </TouchableOpacity>
+          </View>
+        )}
         <Animated.View
           style={[
             styles.roomCard,
+            isPinnedRoom && styles.pinnedRoomCard,
             {
               transform: [{ translateX }],
             },
@@ -163,12 +360,13 @@ export default function ChatListScreen() {
             activeOpacity={0.8}
             onPress={() => {
               // 스와이프된 상태면 닫기
-              if (swipedRoomId === item.id) {
+              if (isSwiped) {
                 Animated.spring(translateX, {
                   toValue: 0,
                   useNativeDriver: true,
                 }).start();
                 setSwipedRoomId(null);
+                setSwipeDirection(null);
                 return;
               }
               navigation.navigate('Chat', {
@@ -181,14 +379,25 @@ export default function ChatListScreen() {
             <View
               style={[
                 styles.avatar,
-                { backgroundColor: AVATAR_COLORS[partner.id.length % AVATAR_COLORS.length] },
+                { backgroundColor: getAvatarColor(partner.gender, !!partner.avatar) },
               ]}
             >
-              <Text style={styles.avatarText}>{initial}</Text>
+              {partner.avatar ? (
+                <Image source={{ uri: partner.avatar }} style={styles.avatarImage} />
+              ) : (
+                <Text style={styles.avatarText}>{initial}</Text>
+              )}
             </View>
             <View style={styles.roomContent}>
               <View style={styles.roomHeader}>
                 <View style={styles.nameRow}>
+                  {isPinnedRoom && (
+                    <Image
+                      source={require('../assets/pinicon.png')}
+                      style={styles.pinIcon}
+                      resizeMode="contain"
+                    />
+                  )}
                   <Text style={styles.partnerName}>{partner.name}</Text>
                 </View>
                 <Text style={styles.timestamp}>{formatTime(item.lastMessage?.timestamp)}</Text>
@@ -206,7 +415,7 @@ export default function ChatListScreen() {
         </Animated.View>
       </View>
     );
-  }, [getChatPartner, navigation, currentUser, swipedRoomId, handleDeleteRoom]);
+  }, [getChatPartner, navigation, currentUser, swipedRoomId, swipeDirection, handleDeleteRoom, isPinned, handlePinToggle]);
 
   const renderRoom = useCallback(({ item }: { item: ChatRoom }) => {
     return <SwipeableRoom item={item} />;
@@ -216,6 +425,15 @@ export default function ChatListScreen() {
 
   return (
     <View style={styles.container}>
+      {sortedRooms.length > 0 && (
+        <TouchableOpacity
+          style={styles.deleteAllButton}
+          onPress={handleDeleteAllRooms}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.deleteAllButtonText}>전체 나가기</Text>
+        </TouchableOpacity>
+      )}
       <View style={styles.header}>
         <Text style={styles.greeting}>안녕하세요, {currentUser.name}님</Text>
         <Text style={styles.subtitle}>메시지를 확인해보세요.</Text>
@@ -227,6 +445,7 @@ export default function ChatListScreen() {
           // 빈 공간 클릭 시 스와이프된 채팅방 닫기
           if (swipedRoomId) {
             setSwipedRoomId(null);
+            setSwipeDirection(null);
           }
         }}
         style={{ flex: 1 }}
@@ -260,7 +479,7 @@ const styles = StyleSheet.create({
     paddingTop: 50,
     paddingHorizontal: 20,
     paddingBottom: 20,
-    backgroundColor: '#4C6EF5',
+    backgroundColor: '#1F2937',
     borderBottomLeftRadius: 24,
     borderBottomRightRadius: 24,
   },
@@ -269,6 +488,21 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#fff',
   },
+  deleteAllButton: {
+    position: 'absolute',
+    top: 50,
+    right: 20,
+    zIndex: 1000,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  deleteAllButtonText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+  },
   subtitle: {
     fontSize: 14,
     color: 'rgba(255,255,255,0.9)',
@@ -276,6 +510,27 @@ const styles = StyleSheet.create({
   swipeContainer: {
     position: 'relative',
     marginBottom: 0,
+  },
+  pinButtonContainer: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    zIndex: 0,
+  },
+  pinButton: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#1F2937',
+    width: 80,
+    height: '100%',
+    paddingHorizontal: 16,
+  },
+  pinButtonIcon: {
+    width: 24,
+    height: 24,
+    tintColor: '#fff',
   },
   deleteButtonContainer: {
     position: 'absolute',
@@ -288,15 +543,15 @@ const styles = StyleSheet.create({
   deleteButton: {
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#FF3B30',
+    backgroundColor: '#DC2626',
     width: 80,
     height: '100%',
     paddingHorizontal: 16,
   },
-  deleteButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
+  deleteButtonIcon: {
+    width: 24,
+    height: 24,
+    tintColor: '#fff',
   },
   roomCard: {
     flexDirection: 'row',
@@ -315,6 +570,16 @@ const styles = StyleSheet.create({
     elevation: 0,
     zIndex: 1,
   },
+  pinnedRoomCard: {
+    backgroundColor: '#F8F9FF',
+    borderLeftWidth: 3,
+    borderLeftColor: 'rgba(31, 41, 55, 0.12)',
+  },
+  pinIcon: {
+    width: 14,
+    height: 14,
+    marginRight: 6,
+  },
   avatar: {
     width: 48,
     height: 48,
@@ -322,6 +587,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 14,
+    overflow: 'hidden',
+  },
+  avatarImage: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
   },
   avatarText: {
     color: '#fff',
@@ -359,7 +630,7 @@ const styles = StyleSheet.create({
     minWidth: 22,
     paddingHorizontal: 6,
     paddingVertical: 4,
-    backgroundColor: '#FF6B6B',
+    backgroundColor: '#DC2626',
     borderRadius: 12,
     alignItems: 'center',
   },

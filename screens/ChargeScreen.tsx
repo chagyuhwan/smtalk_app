@@ -8,11 +8,12 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useChat } from '../context/ChatContext';
 import { RootStackParamList } from '../navigation/types';
 import { paymentService } from '../services/PaymentService';
+import { performanceMonitor } from '../utils/PerformanceMonitor';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -21,6 +22,17 @@ const CHARGE_AMOUNTS = [1000, 3000, 5000, 10000, 20000, 50000];
 export default function ChargeScreen() {
   const navigation = useNavigation<NavigationProp>();
   const { points, addPoints } = useChat();
+  
+  // 성능 측정: 화면 포커스 시
+  useFocusEffect(
+    React.useCallback(() => {
+      performanceMonitor.startScreenLoad('ChargeScreen');
+      return () => {
+        performanceMonitor.endScreenLoad('ChargeScreen');
+      };
+    }, [])
+  );
+  
   const [selectedAmount, setSelectedAmount] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isInitializing, setIsInitializing] = useState(true);
@@ -120,7 +132,7 @@ export default function ChargeScreen() {
   if (isInitializing) {
     return (
       <View style={[styles.container, styles.centerContainer]}>
-        <ActivityIndicator size="large" color="#4C6EF5" />
+        <ActivityIndicator size="large" color="#1F2937" />
         <Text style={styles.loadingText}>결제 서비스를 준비하는 중...</Text>
       </View>
     );
@@ -232,7 +244,7 @@ const styles = StyleSheet.create({
     paddingTop: 60,
     paddingHorizontal: 20,
     paddingBottom: 24,
-    backgroundColor: '#4C6EF5',
+    backgroundColor: '#1F2937',
     borderBottomLeftRadius: 24,
     borderBottomRightRadius: 24,
   },
@@ -286,8 +298,8 @@ const styles = StyleSheet.create({
     borderColor: '#E5E7EB',
   },
   amountButtonSelected: {
-    backgroundColor: '#4C6EF5',
-    borderColor: '#4C6EF5',
+    backgroundColor: '#1F2937',
+    borderColor: '#1F2937',
   },
   amountText: {
     fontSize: 16,
@@ -316,15 +328,15 @@ const styles = StyleSheet.create({
   summaryValue: {
     fontSize: 18,
     fontWeight: '700',
-    color: '#4C6EF5',
+    color: '#1F2937',
   },
   chargeButton: {
-    backgroundColor: '#4C6EF5',
+    backgroundColor: '#1F2937',
     borderRadius: 16,
     paddingVertical: 18,
     alignItems: 'center',
     marginBottom: 24,
-    shadowColor: '#4C6EF5',
+    shadowColor: '#1F2937',
     shadowOpacity: 0.3,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 4 },
@@ -344,7 +356,7 @@ const styles = StyleSheet.create({
     color: '#999',
   },
   infoSection: {
-    backgroundColor: '#E8EDFF',
+    backgroundColor: 'rgba(31, 41, 55, 0.12)',
     borderRadius: 16,
     padding: 20,
     marginBottom: 20,

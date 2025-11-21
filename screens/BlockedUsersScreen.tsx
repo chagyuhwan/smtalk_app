@@ -8,18 +8,19 @@ import {
   Alert,
   Image,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useChat } from '../context/ChatContext';
 import { RootStackParamList } from '../navigation/types';
 import { User } from '../types';
 import { firebaseFirestoreService } from '../services/FirebaseFirestoreService';
+import { performanceMonitor } from '../utils/PerformanceMonitor';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 // 아바타 색상 생성 함수
 const getAvatarColor = (id: string) => {
-  const colors = ['#4C6EF5', '#FF6B6B', '#4ECDC4', '#A29BFE', '#FFD93D', '#6C5CE7'];
+  const colors = ['#1F2937', '#FF6B6B', '#4ECDC4', '#1F2937', '#FFD93D', '#1F2937'];
   return colors[id.length % colors.length];
 };
 
@@ -35,6 +36,17 @@ interface BlockedUserInfo extends User {
 export default function BlockedUsersScreen() {
   const navigation = useNavigation<NavigationProp>();
   const { blockedUsers, unblockUser, contacts } = useChat();
+  
+  // 성능 측정: 화면 포커스 시
+  useFocusEffect(
+    React.useCallback(() => {
+      performanceMonitor.startScreenLoad('BlockedUsersScreen');
+      return () => {
+        performanceMonitor.endScreenLoad('BlockedUsersScreen');
+      };
+    }, [])
+  );
+  
   const [blockedUsersInfo, setBlockedUsersInfo] = useState<BlockedUserInfo[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -218,7 +230,7 @@ const styles = StyleSheet.create({
     paddingTop: 50,
     paddingHorizontal: 20,
     paddingBottom: 16,
-    backgroundColor: '#4C6EF5',
+    backgroundColor: '#1F2937',
   },
   backButton: {
     width: 40,
@@ -309,7 +321,7 @@ const styles = StyleSheet.create({
   unblockButton: {
     paddingHorizontal: 16,
     paddingVertical: 8,
-    backgroundColor: '#4C6EF5',
+    backgroundColor: '#1F2937',
     borderRadius: 8,
   },
   unblockButtonText: {

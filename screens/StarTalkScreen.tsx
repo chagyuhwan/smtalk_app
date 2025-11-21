@@ -13,7 +13,7 @@ import {
   ScrollView,
   Platform,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import * as ImagePicker from 'expo-image-picker';
 import * as MediaLibrary from 'expo-media-library';
@@ -23,18 +23,69 @@ import { useChat } from '../context/ChatContext';
 import { Post, BDSMPreference, Region } from '../types';
 import { RootStackParamList } from '../navigation/types';
 import { REGION_NAMES, REGION_LIST } from '../utils/regions';
+import { performanceMonitor } from '../utils/PerformanceMonitor';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
+const BDSM_LABELS: Record<BDSMPreference, string> = {
+  vanilla: '바닐라',
+  owner: '오너',
+  daddy: '대디',
+  mommy: '마미',
+  dominant: '도미넌트',
+  master: '마스터',
+  mistress: '미스트리스',
+  hunter: '헌터',
+  brattamer: '브랫테이머',
+  degrader: '디그레이더',
+  rigger: '리거',
+  boss: '보스',
+  switch: '스위치',
+  sadist: '사디스트',
+  spanker: '스팽커',
+  pet: '펫',
+  little: '리틀',
+  submissive: '서브미시브',
+  slave: '슬레이브',
+  prey: '프레이',
+  brat: '브랫',
+  degradee: '디그레이디',
+  ropebunny: '로프버니',
+  servant: '서번트',
+  masochist: '마조히스트',
+  spankee: '스팽키이거',
+};
+
 const CHAT_COST = 50;
+
+const getAvatarColor = (gender?: string, hasAvatar?: boolean) => {
+  // 프로필 사진이 없을 때 성별에 따라 색상 설정
+  if (!hasAvatar && gender) {
+    return gender === 'female' ? '#F3AAC2' : '#8FB5DF'; // 여자는 핑크, 남자는 연한 파란색
+  }
+  // 프로필 사진이 있거나 성별 정보가 없을 때는 기본 파란색
+  return '#1F2937';
+};
 
 type PostFilter = 'region' | 'my';
 type GenderFilter = 'all' | 'male' | 'female';
 type BDSMFilter = 'all' | BDSMPreference;
+type AgeFilter = 'all' | '20s' | '30s' | '40s' | '50s';
 
 export default function StarTalkScreen() {
   const navigation = useNavigation<NavigationProp>();
   const { currentUser, points, posts, createPost, startChatFromPost, contacts, blockedUsers, isBlocked, reportPost, blockUser } = useChat();
+  
+  // 성능 측정: 화면 포커스 시
+  useFocusEffect(
+    React.useCallback(() => {
+      performanceMonitor.startScreenLoad('StarTalkScreen');
+      return () => {
+        performanceMonitor.endScreenLoad('StarTalkScreen');
+      };
+    }, [])
+  );
+  
   const [isWriting, setIsWriting] = useState(false);
   const [postContent, setPostContent] = useState('');
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
@@ -42,10 +93,12 @@ export default function StarTalkScreen() {
   const [selectedRegion, setSelectedRegion] = useState<Region | 'all'>('all');
   const [genderFilter, setGenderFilter] = useState<GenderFilter>('all');
   const [bdsmFilter, setBdsmFilter] = useState<BDSMFilter>('all');
+  const [ageFilter, setAgeFilter] = useState<AgeFilter>('all');
   const [showPostDropdown, setShowPostDropdown] = useState(false);
   const [showRegionDropdown, setShowRegionDropdown] = useState(false);
   const [showGenderDropdown, setShowGenderDropdown] = useState(false);
   const [showBdsmDropdown, setShowBdsmDropdown] = useState(false);
+  const [showAgeDropdown, setShowAgeDropdown] = useState(false);
 
   const FILTER_MARGIN_HORIZONTAL = 0;
   const FILTER_PADDING_HORIZONTAL = 20;
@@ -55,6 +108,7 @@ export default function StarTalkScreen() {
   const [postMetrics, setPostMetrics] = useState({ x: 0, width: MIN_DROPDOWN_WIDTH });
   const [genderMetrics, setGenderMetrics] = useState({ x: 0, width: MIN_DROPDOWN_WIDTH });
   const [bdsmMetrics, setBdsmMetrics] = useState({ x: 0, width: MIN_DROPDOWN_WIDTH });
+  const [ageMetrics, setAgeMetrics] = useState({ x: 0, width: MIN_DROPDOWN_WIDTH });
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
 
   const sortedPosts = useMemo(() => {
@@ -78,10 +132,38 @@ export default function StarTalkScreen() {
     if (bdsmFilter !== 'all') {
       filtered = filtered.filter((post) => {
         if (post.authorId === currentUser.id) {
-          return currentUser.bdsmPreference ? currentUser.bdsmPreference === bdsmFilter : false;
+          return currentUser.bdsmPreference ? currentUser.bdsmPreference.includes(bdsmFilter) : false;
         }
         const author = contacts.find((c) => c.id === post.authorId);
-        return author?.bdsmPreference ? author.bdsmPreference === bdsmFilter : false;
+        return author?.bdsmPreference ? author.bdsmPreference.includes(bdsmFilter) : false;
+      });
+    }
+
+    // 나이 필터 적용
+    if (ageFilter !== 'all' && ageFilter) {
+      filtered = filtered.filter((post) => {
+        let authorAge: number | undefined;
+        if (post.authorId === currentUser.id) {
+          authorAge = currentUser.age;
+        } else {
+          const author = contacts.find((c) => c.id === post.authorId);
+          authorAge = author?.age;
+        }
+        
+        if (!authorAge) return false;
+        
+        switch (ageFilter) {
+          case '20s':
+            return authorAge >= 20 && authorAge < 30;
+          case '30s':
+            return authorAge >= 30 && authorAge < 40;
+          case '40s':
+            return authorAge >= 40 && authorAge < 50;
+          case '50s':
+            return authorAge >= 50;
+          default:
+            return true;
+        }
       });
     }
 
@@ -103,7 +185,7 @@ export default function StarTalkScreen() {
 
     filtered.sort((a, b) => b.timestamp - a.timestamp);
     return filtered;
-  }, [posts, postFilter, selectedRegion, genderFilter, bdsmFilter, currentUser, contacts, isBlocked]);
+  }, [posts, postFilter, selectedRegion, genderFilter, bdsmFilter, ageFilter, currentUser, contacts, isBlocked]);
 
   const postFilterLabel = useMemo(() => {
     switch (postFilter) {
@@ -128,29 +210,38 @@ export default function StarTalkScreen() {
   }, [genderFilter]);
 
   const bdsmFilterLabel = useMemo(() => {
-    switch (bdsmFilter) {
-      case 'dominant':
-        return '지배';
-      case 'submissive':
-        return '복종';
-      case 'switch':
-        return '스위치';
-      case 'none':
-        return '없음';
-      default:
-        return 'BDSM';
+    if (bdsmFilter === 'all') {
+      return 'BDSM';
     }
+    return BDSM_LABELS[bdsmFilter] || 'BDSM';
   }, [bdsmFilter]);
+
+  const ageFilterLabel = useMemo(() => {
+    switch (ageFilter) {
+      case '20s':
+        return '20대';
+      case '30s':
+        return '30대';
+      case '40s':
+        return '40대';
+      case '50s':
+        return '50대+';
+      default:
+        return '나이';
+    }
+  }, [ageFilter]);
 
   const isPostFilterActive = showPostDropdown || showRegionDropdown || postFilter !== 'region' || selectedRegion !== 'all';
   const isGenderFilterActive = showGenderDropdown || genderFilter !== 'all';
   const isBdsmFilterActive = showBdsmDropdown || bdsmFilter !== 'all';
+  const isAgeFilterActive = showAgeDropdown || ageFilter !== 'all';
 
   const closeAllDropdowns = useCallback(() => {
     setShowPostDropdown(false);
     setShowRegionDropdown(false);
     setShowGenderDropdown(false);
     setShowBdsmDropdown(false);
+    setShowAgeDropdown(false);
   }, []);
 
   const selectPostFilter = useCallback((value: PostFilter) => {
@@ -176,7 +267,12 @@ export default function StarTalkScreen() {
     setShowBdsmDropdown(false);
   }, []);
 
-  const isDropdownOpen = showPostDropdown || showRegionDropdown || showGenderDropdown || showBdsmDropdown;
+  const selectAgeFilter = useCallback((value: AgeFilter) => {
+    setAgeFilter(value);
+    setShowAgeDropdown(false);
+  }, []);
+
+  const isDropdownOpen = showPostDropdown || showRegionDropdown || showGenderDropdown || showBdsmDropdown || showAgeDropdown;
 
   const formatTime = useCallback((timestamp: number): string => {
     const diff = Date.now() - timestamp;
@@ -543,16 +639,24 @@ export default function StarTalkScreen() {
     const author = isMyPost ? currentUser : contacts.find((c) => c.id === item.authorId);
 
     return (
-      <TouchableOpacity
-        style={styles.postCard}
-        onPress={() => !isMyPost && handleChatFromPost(item)}
-        activeOpacity={0.8}
-        disabled={isMyPost}
-      >
+      <View style={styles.postCard}>
         <View style={styles.postHeader}>
-          <View style={styles.authorInfo}>
-            <View style={[styles.avatar, { backgroundColor: '#4C6EF5' }]}>
-              <Text style={styles.avatarText}>{item.authorName.charAt(0)}</Text>
+          <TouchableOpacity
+            style={styles.authorInfo}
+            onPress={() => {
+              if (author && !isMyPost) {
+                navigation.navigate('UserProfile', { user: author });
+              }
+            }}
+            disabled={isMyPost || !author}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.avatar, { backgroundColor: getAvatarColor(author?.gender, !!author?.avatar) }]}>
+              {author?.avatar ? (
+                <Image source={{ uri: author.avatar }} style={styles.avatarImage} />
+              ) : (
+                <Text style={styles.avatarText}>{item.authorName.charAt(0)}</Text>
+              )}
             </View>
             <View style={styles.authorTextContainer}>
               <View style={styles.nameRow}>
@@ -570,7 +674,7 @@ export default function StarTalkScreen() {
                 {formatTime(item.timestamp)}
               </Text>
             </View>
-          </View>
+          </TouchableOpacity>
           <View style={styles.postHeaderRight}>
             {(() => {
               if (item.images && Array.isArray(item.images) && item.images.length > 0) {
@@ -608,12 +712,21 @@ export default function StarTalkScreen() {
             )}
           </View>
         </View>
-        <View style={styles.contentRow}>
+        <TouchableOpacity
+          style={styles.contentRow}
+          onPress={() => {
+            if (author && !isMyPost) {
+              navigation.navigate('UserProfile', { user: author });
+            }
+          }}
+          activeOpacity={0.8}
+          disabled={isMyPost || !author}
+        >
           <Text style={styles.postContent}>{item.content}</Text>
-        </View>
-      </TouchableOpacity>
+        </TouchableOpacity>
+      </View>
     );
-  }, [currentUser, contacts, formatTime, handleChatFromPost]);
+  }, [currentUser, contacts, formatTime, handleChatFromPost, navigation]);
 
   const keyExtractor = useCallback((item: Post) => item.id, []);
 
@@ -622,9 +735,18 @@ export default function StarTalkScreen() {
       <View style={styles.header}>
         <View style={styles.headerTop}>
           <Text style={styles.title}>별톡</Text>
-          <View style={styles.pointsContainer}>
-            <Text style={styles.pointsText}>💰 {points}P</Text>
-          </View>
+          <TouchableOpacity
+            style={styles.pointsContainer}
+            onPress={() => navigation.navigate('Charge')}
+            activeOpacity={0.7}
+          >
+            <Image
+              source={require('../assets/pointicon.png')}
+              style={styles.pointIcon}
+              resizeMode="contain"
+            />
+            <Text style={styles.pointsText}>{points}P</Text>
+          </TouchableOpacity>
         </View>
         <Text style={styles.subtitle}>안녕하세요, {currentUser.name}님</Text>
       </View>
@@ -656,6 +778,7 @@ export default function StarTalkScreen() {
               }
               setShowGenderDropdown(false);
               setShowBdsmDropdown(false);
+              setShowAgeDropdown(false);
             }}
             onLayout={(e) => {
               const { x, width } = e.nativeEvent.layout;
@@ -680,6 +803,7 @@ export default function StarTalkScreen() {
               setShowPostDropdown(false);
               setShowRegionDropdown(false);
               setShowBdsmDropdown(false);
+              setShowAgeDropdown(false);
             }}
             onLayout={(e) => {
               const { x, width } = e.nativeEvent.layout;
@@ -704,6 +828,7 @@ export default function StarTalkScreen() {
               setShowPostDropdown(false);
               setShowRegionDropdown(false);
               setShowGenderDropdown(false);
+              setShowAgeDropdown(false);
             }}
             onLayout={(e) => {
               const { x, width } = e.nativeEvent.layout;
@@ -717,6 +842,31 @@ export default function StarTalkScreen() {
               ]}
             >
               {bdsmFilterLabel}
+            </Text>
+          </TouchableOpacity>
+          <View style={styles.filterBarDivider} />
+          <TouchableOpacity
+            style={styles.filterBarItem}
+            activeOpacity={0.7}
+            onPress={() => {
+              setShowAgeDropdown((prev) => !prev);
+              setShowPostDropdown(false);
+              setShowRegionDropdown(false);
+              setShowGenderDropdown(false);
+              setShowBdsmDropdown(false);
+            }}
+            onLayout={(e) => {
+              const { x, width } = e.nativeEvent.layout;
+              setAgeMetrics({ x, width: Math.max(width, MIN_DROPDOWN_WIDTH) });
+            }}
+          >
+            <Text
+              style={[
+                styles.filterBarLabel,
+                isAgeFilterActive && styles.filterBarLabelActive,
+              ]}
+            >
+              {ageFilterLabel}
             </Text>
           </TouchableOpacity>
         </View>
@@ -844,44 +994,86 @@ export default function StarTalkScreen() {
               },
             ]}
           >
+            <ScrollView style={{ maxHeight: 400 }}>
+              <TouchableOpacity
+                style={[styles.dropdownRow, bdsmFilter === 'all' && styles.dropdownRowActive]}
+                onPress={() => selectBdsmFilter('all')}
+              >
+                <Text style={[styles.dropdownRowText, bdsmFilter === 'all' && styles.dropdownRowTextActive]}>
+                  전체
+                </Text>
+              </TouchableOpacity>
+              {([
+                'vanilla', 'owner', 'daddy', 'mommy', 'dominant', 'master', 'mistress',
+                'hunter', 'brattamer', 'degrader', 'rigger', 'boss', 'switch',
+                'sadist', 'spanker', 'pet', 'little', 'submissive', 'slave',
+                'prey', 'brat', 'degradee', 'ropebunny', 'servant', 'masochist', 'spankee'
+              ] as BDSMPreference[]).map((pref) => (
+                <TouchableOpacity
+                  key={pref}
+                  style={[styles.dropdownRow, bdsmFilter === pref && styles.dropdownRowActive]}
+                  onPress={() => selectBdsmFilter(pref)}
+                >
+                  <Text style={[styles.dropdownRowText, bdsmFilter === pref && styles.dropdownRowTextActive]}>
+                    {BDSM_LABELS[pref]}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </TouchableWithoutFeedback>
+      )}
+
+      {showAgeDropdown && (
+        <TouchableWithoutFeedback onPress={closeAllDropdowns}>
+          <View
+            style={[
+              styles.dropdownPanel,
+              {
+                top: dropdownTop,
+                left: FILTER_MARGIN_HORIZONTAL + FILTER_PADDING_HORIZONTAL + ageMetrics.x,
+                width: ageMetrics.width,
+              },
+            ]}
+          >
             <TouchableOpacity
-              style={[styles.dropdownRow, bdsmFilter === 'all' && styles.dropdownRowActive]}
-              onPress={() => selectBdsmFilter('all')}
+              style={[styles.dropdownRow, ageFilter === 'all' && styles.dropdownRowActive]}
+              onPress={() => selectAgeFilter('all')}
             >
-              <Text style={[styles.dropdownRowText, bdsmFilter === 'all' && styles.dropdownRowTextActive]}>
-                전체
+              <Text style={[styles.dropdownRowText, ageFilter === 'all' && styles.dropdownRowTextActive]}>
+                전체 나이
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.dropdownRow, bdsmFilter === 'dominant' && styles.dropdownRowActive]}
-              onPress={() => selectBdsmFilter('dominant')}
+              style={[styles.dropdownRow, ageFilter === '20s' && styles.dropdownRowActive]}
+              onPress={() => selectAgeFilter('20s')}
             >
-              <Text style={[styles.dropdownRowText, bdsmFilter === 'dominant' && styles.dropdownRowTextActive]}>
-                지배
+              <Text style={[styles.dropdownRowText, ageFilter === '20s' && styles.dropdownRowTextActive]}>
+                20대
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.dropdownRow, bdsmFilter === 'submissive' && styles.dropdownRowActive]}
-              onPress={() => selectBdsmFilter('submissive')}
+              style={[styles.dropdownRow, ageFilter === '30s' && styles.dropdownRowActive]}
+              onPress={() => selectAgeFilter('30s')}
             >
-              <Text style={[styles.dropdownRowText, bdsmFilter === 'submissive' && styles.dropdownRowTextActive]}>
-                복종
+              <Text style={[styles.dropdownRowText, ageFilter === '30s' && styles.dropdownRowTextActive]}>
+                30대
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.dropdownRow, bdsmFilter === 'switch' && styles.dropdownRowActive]}
-              onPress={() => selectBdsmFilter('switch')}
+              style={[styles.dropdownRow, ageFilter === '40s' && styles.dropdownRowActive]}
+              onPress={() => selectAgeFilter('40s')}
             >
-              <Text style={[styles.dropdownRowText, bdsmFilter === 'switch' && styles.dropdownRowTextActive]}>
-                스위치
+              <Text style={[styles.dropdownRowText, ageFilter === '40s' && styles.dropdownRowTextActive]}>
+                40대
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.dropdownRow, bdsmFilter === 'none' && styles.dropdownRowActive]}
-              onPress={() => selectBdsmFilter('none')}
+              style={[styles.dropdownRow, ageFilter === '50s' && styles.dropdownRowActive]}
+              onPress={() => selectAgeFilter('50s')}
             >
-              <Text style={[styles.dropdownRowText, bdsmFilter === 'none' && styles.dropdownRowTextActive]}>
-                없음
+              <Text style={[styles.dropdownRowText, ageFilter === '50s' && styles.dropdownRowTextActive]}>
+                50대+
               </Text>
             </TouchableOpacity>
           </View>
@@ -927,7 +1119,10 @@ export default function StarTalkScreen() {
         onPress={() => setIsWriting(true)}
         activeOpacity={0.8}
       >
-        <Text style={styles.writeButtonText}>✏️ 글쓰기</Text>
+        <View style={styles.writeButtonContent}>
+          <Image source={require('../assets/posticon.png')} style={styles.writeButtonIcon} />
+          <Text style={styles.writeButtonText}>글쓰기</Text>
+        </View>
       </TouchableOpacity>
 
       <Modal
@@ -1050,7 +1245,7 @@ const styles = StyleSheet.create({
     paddingTop: 50,
     paddingHorizontal: 20,
     paddingBottom: 20,
-    backgroundColor: '#4C6EF5',
+    backgroundColor: '#1F2937',
     borderBottomLeftRadius: 24,
     borderBottomRightRadius: 24,
   },
@@ -1069,6 +1264,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  pointIcon: {
+    width: 20,
+    height: 20,
+    marginRight: 6,
   },
   pointsText: {
     fontSize: 14,
@@ -1105,11 +1307,11 @@ const styles = StyleSheet.create({
   filterBarLabel: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#5F6B8A',
+    color: '#1F2937',
     letterSpacing: 0.2,
   },
   filterBarLabelActive: {
-    color: '#2F54EB',
+    color: '#1F2937',
   },
   filterBarDivider: {
     width: 1,
@@ -1136,7 +1338,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
   },
   dropdownRowActive: {
-    backgroundColor: '#EEF2FF',
+    backgroundColor: 'rgba(31, 41, 55, 0.12)',
   },
   dropdownRowText: {
     fontSize: 15,
@@ -1144,7 +1346,7 @@ const styles = StyleSheet.create({
     color: '#344054',
   },
   dropdownRowTextActive: {
-    color: '#4C6EF5',
+    color: '#1F2937',
     fontWeight: '600',
   },
   postList: {
@@ -1202,6 +1404,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 12,
+    overflow: 'hidden',
+  },
+  avatarImage: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
   },
   avatarText: {
     color: '#fff',
@@ -1222,13 +1430,13 @@ const styles = StyleSheet.create({
   age: {
     fontSize: 13,
     fontWeight: '500',
-    color: '#667085',
+    color: 'rgba(31, 41, 55, 0.12)',
     marginRight: 6,
   },
   gender: {
     fontSize: 13,
     fontWeight: '500',
-    color: '#667085',
+    color: 'rgba(31, 41, 55, 0.12)',
     marginRight: 6,
   },
   postTime: {
@@ -1274,7 +1482,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 20,
     right: 20,
-    backgroundColor: '#4C6EF5',
+    backgroundColor: '#1F2937',
     borderRadius: 28,
     paddingHorizontal: 20,
     paddingVertical: 14,
@@ -1283,6 +1491,17 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 4 },
     elevation: 4,
+  },
+  writeButtonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  writeButtonIcon: {
+    width: 22,
+    height: 22,
+    marginRight: 6,
+    tintColor: '#fff',
   },
   writeButtonText: {
     color: '#fff',
@@ -1372,7 +1591,7 @@ const styles = StyleSheet.create({
   },
   changeImageButton: {
     borderWidth: 1,
-    borderColor: '#4C6EF5',
+    borderColor: '#1F2937',
     borderRadius: 8,
     padding: 12,
     alignItems: 'center',
@@ -1381,7 +1600,7 @@ const styles = StyleSheet.create({
   },
   changeImageText: {
     fontSize: 14,
-    color: '#4C6EF5',
+    color: '#1F2937',
     fontWeight: '500',
   },
   modalFooter: {
@@ -1390,7 +1609,7 @@ const styles = StyleSheet.create({
     borderTopColor: '#E5E7EB',
   },
   submitButton: {
-    backgroundColor: '#4C6EF5',
+    backgroundColor: '#1F2937',
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: 'center',

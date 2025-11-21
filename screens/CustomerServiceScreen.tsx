@@ -8,12 +8,13 @@ import {
   TextInput,
   Alert,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
 import { useChat } from '../context/ChatContext';
 import { firebaseFirestoreService } from '../services/FirebaseFirestoreService';
 import { auth } from '../config/firebase';
+import { performanceMonitor } from '../utils/PerformanceMonitor';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -59,6 +60,17 @@ const FAQ_DATA: FAQItem[] = [
 export default function CustomerServiceScreen() {
   const navigation = useNavigation<NavigationProp>();
   const { currentUser } = useChat();
+  
+  // 성능 측정: 화면 포커스 시
+  useFocusEffect(
+    React.useCallback(() => {
+      performanceMonitor.startScreenLoad('CustomerServiceScreen');
+      return () => {
+        performanceMonitor.endScreenLoad('CustomerServiceScreen');
+      };
+    }, [])
+  );
+  
   const [expandedFAQ, setExpandedFAQ] = useState<string | null>(null);
   const [inquiryText, setInquiryText] = useState('');
   const [showInquiryForm, setShowInquiryForm] = useState(false);
@@ -226,7 +238,7 @@ const styles = StyleSheet.create({
     paddingTop: 50,
     paddingHorizontal: 20,
     paddingBottom: 16,
-    backgroundColor: '#4C6EF5',
+    backgroundColor: '#1F2937',
   },
   backButton: {
     width: 40,
@@ -298,7 +310,7 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   inquiryButton: {
-    backgroundColor: '#4C6EF5',
+    backgroundColor: '#1F2937',
     borderRadius: 12,
     paddingVertical: 16,
     paddingHorizontal: 20,
@@ -354,7 +366,7 @@ const styles = StyleSheet.create({
     color: '#667085',
   },
   submitButton: {
-    backgroundColor: '#4C6EF5',
+    backgroundColor: '#1F2937',
   },
   submitButtonText: {
     fontSize: 16,
