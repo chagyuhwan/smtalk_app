@@ -22,6 +22,20 @@
           "color": "#ffffff",
           "sounds": []
         }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "newArchEnabled": false,
+            "enableProguardInReleaseBuilds": false,
+            "packagingOptions": {
+              "pickFirst": [
+                "**/libc++_shared.so"
+              ]
+            }
+          }
+        }
       ]
     ],
     "ios": {
