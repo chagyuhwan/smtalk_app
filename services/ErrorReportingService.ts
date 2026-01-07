@@ -193,11 +193,21 @@ export const errorReportingService = new ErrorReportingService();
 
 /**
  * 전역 에러 핸들러 설정
+ * 웹 환경에서는 ReactFabric 관련 에러를 무시
  */
-if (typeof ErrorUtils !== 'undefined') {
+if (typeof ErrorUtils !== 'undefined' && Platform.OS !== 'web') {
   const originalHandler = ErrorUtils.getGlobalHandler();
   
   ErrorUtils.setGlobalHandler((error: Error, isFatal?: boolean) => {
+    // ReactFabric 관련 에러는 웹에서 발생하는 알려진 문제이므로 무시
+    if (Platform.OS === 'web' && (
+      error.message?.includes('ReactSharedInternals') ||
+      error.message?.includes('ReactFabric') ||
+      error.stack?.includes('ReactFabric')
+    )) {
+      return; // 에러 무시
+    }
+    
     // 에러 리포팅 (비동기이지만 await 없이 호출)
     errorReportingService.logCrash(error, {
       isFatal: isFatal || false,
