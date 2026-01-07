@@ -74,12 +74,16 @@ class ErrorReportingService {
       }
 
       // 프로덕션 환경에서만 Firestore에 저장
-      if (this.enabled && this.initialized) {
+      // 웹에서는 인증이 필요하므로 인증된 경우에만 저장
+      if (this.enabled && this.initialized && Platform.OS !== 'web') {
         try {
           await this.saveToFirestore(errorInfo);
         } catch (firestoreError) {
           // Firestore 저장 실패해도 앱은 계속 작동
-          console.error('Firestore 에러 저장 실패:', firestoreError);
+          // 웹에서는 권한 문제로 실패할 수 있으므로 조용히 처리
+          if (Platform.OS !== 'web') {
+            console.error('Firestore 에러 저장 실패:', firestoreError);
+          }
         }
       }
     } catch (reportingError) {

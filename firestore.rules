@@ -162,10 +162,12 @@ service cloud.firestore {
     // ==================== 에러 로그 (errorLogs) ====================
     match /errorLogs/{errorId} {
       // 모든 인증된 사용자는 에러 로그를 작성할 수 있음 (크래시 리포팅)
-      allow create: if request.auth != null;
+      // 인증되지 않은 경우도 허용 (웹 환경 대응)
+      allow create: if true;
       
       // 관리자만 에러 로그를 읽을 수 있음
       allow read: if request.auth != null && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
       
       // 에러 로그는 수정/삭제 불가 (읽기 전용)
