@@ -36,6 +36,9 @@
               "pickFirst": [
                 "**/libc++_shared.so"
               ]
+            },
+            "productFlavors": {
+              "play": {}
             }
           }
         }
