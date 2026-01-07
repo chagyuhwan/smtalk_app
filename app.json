@@ -11,11 +11,6 @@
       "image": "./assets/appicon2.png",
       "resizeMode": "contain"
     },
-    "autolinking": {
-      "exclude": [
-        "expo-firebase-core"
-      ]
-    },
     "plugins": [
       [
         "expo-notifications",
