@@ -195,7 +195,7 @@ export const errorReportingService = new ErrorReportingService();
  * 전역 에러 핸들러 설정
  * 웹 환경에서는 ReactFabric 관련 에러를 무시
  */
-if (typeof ErrorUtils !== 'undefined' && Platform.OS !== 'web') {
+if (typeof ErrorUtils !== 'undefined') {
   const originalHandler = ErrorUtils.getGlobalHandler();
   
   ErrorUtils.setGlobalHandler((error: Error, isFatal?: boolean) => {
@@ -203,21 +203,28 @@ if (typeof ErrorUtils !== 'undefined' && Platform.OS !== 'web') {
     if (Platform.OS === 'web' && (
       error.message?.includes('ReactSharedInternals') ||
       error.message?.includes('ReactFabric') ||
-      error.stack?.includes('ReactFabric')
+      error.message?.includes("Cannot read property 'S'") ||
+      error.message?.includes("Cannot read property 'default'") ||
+      error.stack?.includes('ReactFabric') ||
+      error.stack?.includes('RendererImplementation')
     )) {
-      return; // 에러 무시
+      // 웹에서 ReactFabric 에러는 조용히 무시
+      return;
     }
     
-    // 에러 리포팅 (비동기이지만 await 없이 호출)
-    errorReportingService.logCrash(error, {
-      isFatal: isFatal || false,
-      platform: 'react-native',
-    }).catch((reportingError) => {
-      // 에러 리포팅 실패는 조용히 처리
-      console.error('전역 에러 핸들러 리포팅 실패:', reportingError);
-    });
+    // 웹 환경에서는 에러 리포팅 비활성화
+    if (Platform.OS !== 'web') {
+      // 에러 리포팅 (비동기이지만 await 없이 호출)
+      errorReportingService.logCrash(error, {
+        isFatal: isFatal || false,
+        platform: 'react-native',
+      }).catch((reportingError) => {
+        // 에러 리포팅 실패는 조용히 처리
+        console.error('전역 에러 핸들러 리포팅 실패:', reportingError);
+      });
+    }
     
-    // 원래 핸들러 호출
+    // 원래 핸들러 호출 (웹에서는 ReactFabric 에러는 이미 무시됨)
     if (originalHandler) {
       originalHandler(error, isFatal);
     }
