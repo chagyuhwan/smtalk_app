@@ -29,6 +29,9 @@
           "android": {
             "newArchEnabled": false,
             "enableProguardInReleaseBuilds": false,
+            "compileSdkVersion": 36,
+            "targetSdkVersion": 36,
+            "minSdkVersion": 24,
             "packagingOptions": {
               "pickFirst": [
                 "**/libc++_shared.so"
