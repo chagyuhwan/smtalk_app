@@ -24,7 +24,10 @@
       "env": {
         "NODE_ENV": "production"
       },
-      "node": "20.18.0"
+      "node": "20.18.0",
+      "cache": {
+        "disabled": true
+      }
     },
     "production": {
       "ios": {
@@ -38,7 +41,7 @@
       },
       "node": "20.18.0",
       "cache": {
-        "disabled": false
+        "disabled": true
       },
       "resourceClass": "medium"
     }
