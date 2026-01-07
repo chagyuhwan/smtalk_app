@@ -21,8 +21,7 @@ import { firebaseAuthService } from '../services/FirebaseAuthService';
 import { firebaseFirestoreService } from '../services/FirebaseFirestoreService';
 import { firebaseStorageService } from '../services/FirebaseStorageService';
 import { auth } from '../config/firebase';
-import { FirebaseRecaptchaVerifierModal } from 'expo-firebase-recaptcha';
-import app from '../config/firebase';
+import { RecaptchaVerifier } from 'firebase/auth';
 import { BDSMPreference, Region } from '../types';
 import { REGION_NAMES, REGION_LIST, getLocationFromRegion } from '../utils/regions';
 import { performanceMonitor } from '../utils/PerformanceMonitor';
@@ -68,7 +67,7 @@ export default function PhoneAuthScreen({ navigation }: Props) {
   const [agreedToPrivacy, setAgreedToPrivacy] = useState(false);
   const codeInputRef = useRef<TextInput>(null);
   const nameInputRef = useRef<TextInput>(null);
-  const recaptchaVerifierRef = useRef<FirebaseRecaptchaVerifierModal>(null);
+  const recaptchaVerifierRef = useRef<RecaptchaVerifier | null>(null);
 
   const BDSM_LABELS: Record<BDSMPreference, string> = {
     vanilla: '바닐라',
@@ -134,6 +133,47 @@ export default function PhoneAuthScreen({ navigation }: Props) {
         onPress: () => setAvatarUri(undefined),
       },
     ]);
+  }, []);
+
+  // reCAPTCHA verifier 초기화
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      // 웹에서는 RecaptchaVerifier를 직접 생성
+      try {
+        recaptchaVerifierRef.current = new RecaptchaVerifier(auth, 'recaptcha-container', {
+          size: 'invisible',
+          callback: () => {
+            console.log('reCAPTCHA verified');
+          },
+          'expired-callback': () => {
+            console.log('reCAPTCHA expired');
+          },
+        });
+      } catch (error) {
+        console.error('reCAPTCHA 초기화 오류:', error);
+      }
+    } else {
+      // 모바일에서는 RecaptchaVerifier를 생성 (invisible)
+      try {
+        recaptchaVerifierRef.current = new RecaptchaVerifier(auth, {
+          size: 'invisible',
+        });
+      } catch (error) {
+        console.error('reCAPTCHA 초기화 오류:', error);
+      }
+    }
+
+    return () => {
+      // 정리
+      if (recaptchaVerifierRef.current) {
+        try {
+          recaptchaVerifierRef.current.clear();
+        } catch (error) {
+          console.error('reCAPTCHA 정리 오류:', error);
+        }
+        recaptchaVerifierRef.current = null;
+      }
+    };
   }, []);
 
   // 카운트다운 타이머
@@ -438,11 +478,9 @@ export default function PhoneAuthScreen({ navigation }: Props) {
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
-      <FirebaseRecaptchaVerifierModal
-        ref={recaptchaVerifierRef}
-        firebaseConfig={app.options}
-        attemptInvisibleVerification={true}
-      />
+      {Platform.OS === 'web' && (
+        <div id="recaptcha-container" style={{ display: 'none' }} />
+      )}
       
       <View style={step === 'signup' ? styles.contentSignup : styles.content}>
         <Text style={styles.title}>

@@ -12,8 +12,8 @@ import {
   signOut as firebaseSignOut,
   User,
   ConfirmationResult,
+  RecaptchaVerifier,
 } from 'firebase/auth';
-import type { FirebaseRecaptchaVerifierModal } from 'expo-firebase-recaptcha';
 import { auth } from '../config/firebase';
 import { Platform } from 'react-native';
 
@@ -63,11 +63,11 @@ class FirebaseAuthService {
   /**
    * 인증 코드 발송
    * @param phoneNumber 전화번호 (010-1234-5678 형식)
-   * @param recaptchaVerifier reCAPTCHA verifier (expo-firebase-recaptcha에서 생성)
+   * @param recaptchaVerifier reCAPTCHA verifier (Firebase 웹 SDK RecaptchaVerifier)
    */
   async sendVerificationCode(
     phoneNumber: string, 
-    recaptchaVerifier: FirebaseRecaptchaVerifierModal
+    recaptchaVerifier: RecaptchaVerifier
   ): Promise<PhoneAuthResult> {
     try {
       const normalized = this.normalizePhoneNumber(phoneNumber);
@@ -84,12 +84,10 @@ class FirebaseAuthService {
       console.log('플랫폼:', Platform.OS);
 
       // Firebase 웹 SDK를 사용하여 전화번호 인증
-      // FirebaseRecaptchaVerifierModal의 ref.current가 verifier를 반환함
-      const verifier = (recaptchaVerifier as any)?.current || (recaptchaVerifier as any);
       const confirmation = await signInWithPhoneNumber(
         auth,
         internationalPhone,
-        verifier as any
+        recaptchaVerifier
       );
       
       console.log('인증 코드 발송 성공, verificationId:', confirmation.verificationId);

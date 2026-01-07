@@ -26,8 +26,8 @@
           "android": {
             "newArchEnabled": false,
             "enableProguardInReleaseBuilds": false,
-            "compileSdkVersion": 36,
-            "targetSdkVersion": 36,
+            "compileSdkVersion": 35,
+            "targetSdkVersion": 35,
             "minSdkVersion": 24,
             "packagingOptions": {
               "pickFirst": [
@@ -36,7 +36,8 @@
             }
           }
         }
-      ]
+      ],
+      "react-native-iap"
     ],
     "ios": {
       "supportsTablet": true,
