@@ -138,17 +138,20 @@ export default function PhoneAuthScreen({ navigation }: Props) {
   // reCAPTCHA verifier 초기화
   useEffect(() => {
     if (Platform.OS === 'web') {
-      // 웹에서는 RecaptchaVerifier를 직접 생성
+      // 웹에서는 DOM 요소를 사용하여 RecaptchaVerifier 생성
       try {
-        recaptchaVerifierRef.current = new RecaptchaVerifier(auth, 'recaptcha-container', {
-          size: 'invisible',
-          callback: () => {
-            console.log('reCAPTCHA verified');
-          },
-          'expired-callback': () => {
-            console.log('reCAPTCHA expired');
-          },
-        });
+        const container = document.getElementById('recaptcha-container');
+        if (container) {
+          recaptchaVerifierRef.current = new RecaptchaVerifier(auth, container, {
+            size: 'invisible',
+            callback: () => {
+              console.log('reCAPTCHA verified');
+            },
+            'expired-callback': () => {
+              console.log('reCAPTCHA expired');
+            },
+          } as any);
+        }
       } catch (error) {
         console.error('reCAPTCHA 초기화 오류:', error);
       }
@@ -157,7 +160,7 @@ export default function PhoneAuthScreen({ navigation }: Props) {
       try {
         recaptchaVerifierRef.current = new RecaptchaVerifier(auth, {
           size: 'invisible',
-        });
+        } as any);
       } catch (error) {
         console.error('reCAPTCHA 초기화 오류:', error);
       }
