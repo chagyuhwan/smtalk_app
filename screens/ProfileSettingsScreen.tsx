@@ -10,7 +10,9 @@ import {
   Image,
   Platform,
   Modal,
+  KeyboardAvoidingView,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -65,6 +67,7 @@ const BDSM_LABELS: Record<BDSMPreference, string> = {
 export default function ProfileSettingsScreen() {
   const navigation = useNavigation<NavigationProp>();
   const { currentUser, updateProfile, updateRegion } = useChat();
+  const insets = useSafeAreaInsets();
   
   // 성능 측정: 화면 포커스 시
   useFocusEffect(
@@ -79,6 +82,16 @@ export default function ProfileSettingsScreen() {
   const [name, setName] = useState(currentUser.name);
   const [gender, setGender] = useState<Gender | undefined>(currentUser.gender);
   const [avatarUri, setAvatarUri] = useState<string | undefined>(currentUser.avatar);
+  // profileImages 초기화: profileImages가 있으면 사용, 없으면 avatar가 있으면 배열로 변환
+  const [profileImages, setProfileImages] = useState<string[]>(() => {
+    if (currentUser.profileImages && currentUser.profileImages.length > 0) {
+      return currentUser.profileImages;
+    }
+    if (currentUser.avatar) {
+      return [currentUser.avatar];
+    }
+    return [];
+  });
   const [age, setAge] = useState<string>(currentUser.age?.toString() || '');
   // bdsmPreference가 배열이 아닌 경우(기존 데이터) 배열로 변환
   const normalizeBdsmPreference = useCallback((pref: BDSMPreference | BDSMPreference[] | undefined): BDSMPreference[] => {
@@ -167,19 +180,16 @@ export default function ProfileSettingsScreen() {
       finalAge = ageNum;
     }
 
-    // BDSM 성향 검증
-    if (!bdsmPreference || bdsmPreference.length === 0) {
-      Alert.alert('알림', 'BDSM 성향을 최소 1개 이상 선택해주세요.');
-      return;
-    }
-
-    if (bdsmPreference.length > 3) {
+    // BDSM 성향은 선택사항이지만, 선택한 경우 최대 3개까지 가능
+    if (bdsmPreference && bdsmPreference.length > 3) {
       Alert.alert('알림', 'BDSM 성향은 최대 3개까지 선택할 수 있습니다.');
       return;
     }
 
     try {
-      await updateProfile(trimmedName, finalGender, avatarUri, finalAge, bdsmPreference, bio.trim() || undefined);
+      // profileImages가 있으면 사용, 없으면 avatarUri 사용
+      const finalProfileImages = profileImages.length > 0 ? profileImages : (avatarUri ? [avatarUri] : undefined);
+      await updateProfile(trimmedName, finalGender, avatarUri, finalAge, bdsmPreference, bio.trim() || undefined, finalProfileImages);
       // 지역이 변경된 경우 또는 지역이 없을 때 업데이트
       const finalRegion = region || 'seoul';
       if (finalRegion !== currentUser.region) {
@@ -201,9 +211,16 @@ export default function ProfileSettingsScreen() {
       console.error('프로필 업데이트 오류:', error);
       Alert.alert('오류', `프로필 업데이트에 실패했습니다: ${error.message || '알 수 없는 오류'}`);
     }
-  }, [name, gender, avatarUri, age, bdsmPreference, bio, region, currentUser.gender, currentUser.region, updateProfile, updateRegion, navigation]);
+  }, [name, gender, avatarUri, profileImages, age, bdsmPreference, bio, region, currentUser.gender, currentUser.region, updateProfile, updateRegion, navigation]);
 
   const pickImage = useCallback(async () => {
+    // 최대 3장까지 업로드 가능
+    const remainingSlots = 3 - profileImages.length;
+    if (remainingSlots <= 0) {
+      Alert.alert('알림', '프로필 사진은 최대 3장까지 업로드할 수 있습니다.');
+      return;
+    }
+
     // 권한 요청
     if (Platform.OS !== 'web') {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -215,31 +232,75 @@ export default function ProfileSettingsScreen() {
 
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [1, 1],
+      allowsEditing: false, // 여러 개 선택 시 편집 비활성화 (선택 후 확인)
       quality: 0.8,
+      allowsMultipleSelection: true, // 여러 개 선택 가능
+      selectionLimit: remainingSlots, // 남은 슬롯만큼만 선택 가능
     });
 
-    if (!result.canceled && result.assets[0]) {
-      setAvatarUri(result.assets[0].uri);
-    }
-  }, []);
+    if (!result.canceled && result.assets && result.assets.length > 0) {
+      const newImageUris = result.assets.map(asset => asset.uri);
+      
+      // 남은 슬롯을 초과하지 않도록 제한
+      const imagesToAdd = newImageUris.slice(0, remainingSlots);
+      
+      // 선택한 이미지들을 확인하는 모달 표시
+      Alert.alert(
+        '선택한 사진 확인',
+        `${imagesToAdd.length}장의 사진을 추가하시겠습니까?`,
+        [
+          {
+            text: '취소',
+            style: 'cancel',
+          },
+          {
+            text: '확인',
+            onPress: () => {
+              setProfileImages(prev => {
+                const updated = [...prev, ...imagesToAdd];
+                // 첫 번째 이미지는 avatarUri로도 설정 (호환성 유지)
+                if (prev.length === 0 && updated.length > 0) {
+                  setAvatarUri(updated[0]);
+                }
+                return updated;
+              });
+            },
+          },
+        ]
+      );
 
-  const removeImage = useCallback(() => {
-    Alert.alert('프로필 사진 삭제', '프로필 사진을 삭제하시겠습니까?', [
+      // 선택한 이미지가 남은 슬롯보다 많으면 알림
+      if (newImageUris.length > remainingSlots) {
+        Alert.alert('알림', `최대 ${remainingSlots}장까지만 선택할 수 있습니다. ${remainingSlots}장만 추가됩니다.`);
+      }
+    }
+  }, [profileImages.length]);
+
+  const removeImage = useCallback((index: number) => {
+    Alert.alert('프로필 사진 삭제', '이 사진을 삭제하시겠습니까?', [
       { text: '취소', style: 'cancel' },
       {
         text: '삭제',
         style: 'destructive',
-        onPress: () => setAvatarUri(undefined),
+        onPress: () => {
+          const newImages = profileImages.filter((_, i) => i !== index);
+          setProfileImages(newImages);
+          // 첫 번째 이미지가 삭제되면 다음 이미지를 avatarUri로 설정
+          if (index === 0 && newImages.length > 0) {
+            setAvatarUri(newImages[0]);
+          } else if (newImages.length === 0) {
+            setAvatarUri(undefined);
+          }
+        },
       },
     ]);
-  }, []);
+  }, [profileImages]);
 
   const initial = name.charAt(0).toUpperCase() || '?';
   // 성별은 현재 사용자의 성별 또는 선택한 성별 사용
   const currentGender = currentUser.gender || gender;
-  const avatarColor = getAvatarColor(currentGender, !!avatarUri);
+  const hasProfileImages = profileImages.length > 0;
+  const avatarColor = getAvatarColor(currentGender, hasProfileImages);
 
   const getGenderLabel = (g?: Gender) => {
     if (!g) return '';
@@ -257,29 +318,89 @@ export default function ProfileSettingsScreen() {
   console.log('ProfileSettingsScreen 렌더링 - region:', region, 'currentUser.region:', currentUser.region);
   
   return (
-    <View style={styles.container}>
-      <ScrollView style={styles.content} contentContainerStyle={styles.contentContainer}>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
+    >
+      <View style={styles.header}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => navigation.goBack()}
+        >
+          <Text style={styles.backButtonText}>‹</Text>
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>프로필 설정</Text>
+        <View style={styles.backButton} />
+      </View>
+      <ScrollView 
+        style={styles.content} 
+        contentContainerStyle={styles.contentContainer}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={true}
+      >
         <View style={styles.avatarSection}>
-          <TouchableOpacity onPress={pickImage} activeOpacity={0.8}>
-            <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
-              {avatarUri ? (
-                <Image source={{ uri: avatarUri }} style={styles.avatarImage} />
-              ) : (
+          <Text style={styles.sectionLabel}>프로필 사진 (최대 3장)</Text>
+          {profileImages.length === 0 ? (
+            <TouchableOpacity onPress={pickImage} activeOpacity={0.8} style={styles.emptyAvatarContainer}>
+              <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
                 <Text style={styles.avatarText}>{initial}</Text>
-              )}
-              <View style={styles.cameraIcon}>
-                <Text style={styles.cameraIconText}>📷</Text>
               </View>
+              <Text style={styles.emptyAvatarHint}>사진을 추가해주세요</Text>
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.profileImagesGrid}>
+              {profileImages.map((imageUri, index) => (
+                <View key={index} style={styles.profileImageWrapper}>
+                  <TouchableOpacity onPress={pickImage} activeOpacity={0.8}>
+                    <View style={[styles.profileImageItem, { backgroundColor: avatarColor }]}>
+                      <Image source={{ uri: imageUri }} style={styles.profileImageItemImage} />
+                    </View>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.removeImageButton}
+                    onPress={() => removeImage(index)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.removeImageButtonText}>×</Text>
+                  </TouchableOpacity>
+                </View>
+              ))}
+              {profileImages.length < 3 && (
+                <TouchableOpacity onPress={pickImage} activeOpacity={0.8} style={styles.addImageButton}>
+                  <View style={[styles.profileImageItem, styles.addImageButtonInner]}>
+                    <Text style={styles.addImageButtonText}>+</Text>
+                    <Text style={styles.addImageButtonSubtext}>추가</Text>
+                  </View>
+                </TouchableOpacity>
+              )}
             </View>
-          </TouchableOpacity>
+          )}
           <View style={styles.avatarActions}>
             <TouchableOpacity onPress={pickImage} style={styles.avatarActionButton}>
-              <Text style={styles.avatarActionText}>사진 변경</Text>
+              <Text style={styles.avatarActionText}>
+                {profileImages.length > 0 ? '사진 추가' : '사진 선택'}
+              </Text>
             </TouchableOpacity>
-            {avatarUri && (
-              <TouchableOpacity onPress={removeImage} style={styles.avatarActionButton}>
+            {profileImages.length > 0 && (
+              <TouchableOpacity 
+                onPress={() => {
+                  Alert.alert('전체 삭제', '모든 프로필 사진을 삭제하시겠습니까?', [
+                    { text: '취소', style: 'cancel' },
+                    {
+                      text: '삭제',
+                      style: 'destructive',
+                      onPress: () => {
+                        setProfileImages([]);
+                        setAvatarUri(undefined);
+                      },
+                    },
+                  ]);
+                }} 
+                style={styles.avatarActionButton}
+              >
                 <Text style={[styles.avatarActionText, styles.avatarActionTextDanger]}>
-                  삭제
+                  전체 삭제
                 </Text>
               </TouchableOpacity>
             )}
@@ -524,10 +645,7 @@ export default function ProfileSettingsScreen() {
               <TouchableOpacity
                 style={styles.modalConfirmButton}
                 onPress={() => {
-                  if (bdsmPreference.length === 0) {
-                    Alert.alert('알림', '최소 1개 이상 선택해주세요.');
-                    return;
-                  }
+                  // BDSM 성향은 선택사항이므로 바로 닫기
                   setShowBdsmDropdown(false);
                 }}
               >
@@ -564,7 +682,7 @@ export default function ProfileSettingsScreen() {
           <Text style={styles.saveButtonText}>저장하기</Text>
         </TouchableOpacity>
       </ScrollView>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -572,6 +690,33 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#fff',
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingTop: 50,
+    paddingHorizontal: 20,
+    paddingBottom: 16,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  backButton: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  backButtonText: {
+    fontSize: 28,
+    color: '#111',
+    fontWeight: '300',
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#111',
   },
   content: {
     flex: 1,
@@ -583,6 +728,98 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 32,
     marginTop: 20,
+  },
+  sectionLabel: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#666',
+    marginBottom: 12,
+    alignSelf: 'flex-start',
+    marginLeft: 4,
+  },
+  profileImagesGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-start',
+    gap: 12,
+    paddingHorizontal: 4,
+    paddingVertical: 8,
+    marginBottom: 16,
+  },
+  profileImageWrapper: {
+    position: 'relative',
+    overflow: 'visible',
+    marginBottom: 8, // 엑스 버튼을 위한 여유 공간
+  },
+  profileImageItem: {
+    width: 100,
+    height: 100,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+    borderWidth: 1.5,
+    borderColor: '#E5E7EB',
+    backgroundColor: '#F9FAFB',
+  },
+  profileImageItemImage: {
+    width: 100,
+    height: 100,
+    borderRadius: 12,
+  },
+  removeImageButton: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#FF6B6B',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#fff',
+    zIndex: 10,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+  },
+  removeImageButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: 'bold',
+    lineHeight: 16,
+    marginTop: -1,
+  },
+  addImageButton: {
+    marginBottom: 8,
+  },
+  addImageButtonInner: {
+    borderWidth: 1.5,
+    borderColor: '#D0D5DD',
+    borderStyle: 'dashed',
+    backgroundColor: '#F9FAFB',
+  },
+  addImageButtonText: {
+    fontSize: 20,
+    color: '#667085',
+    fontWeight: '300',
+  },
+  addImageButtonSubtext: {
+    fontSize: 9,
+    color: '#667085',
+    marginTop: 2,
+  },
+  emptyAvatarHint: {
+    fontSize: 13,
+    color: '#667085',
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  emptyAvatarContainer: {
+    marginBottom: 12,
   },
   avatar: {
     width: 100,

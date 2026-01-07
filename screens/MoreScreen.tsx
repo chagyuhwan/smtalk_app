@@ -6,6 +6,7 @@ import { useChat } from '../context/ChatContext';
 import { RootStackParamList } from '../navigation/types';
 import { firebaseAuthService } from '../services/FirebaseAuthService';
 import { performanceMonitor } from '../utils/PerformanceMonitor';
+import { POINTS, TIME } from '../constants';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -74,7 +75,7 @@ export default function MoreScreen() {
     
     if (isDeletionRequested) {
       // 탈퇴 취소
-      const deletionScheduledAt = currentUser.deletionScheduledAt || (currentUser.deletionRequestedAt + 30 * 24 * 60 * 60 * 1000);
+      const deletionScheduledAt = currentUser.deletionScheduledAt || (currentUser.deletionRequestedAt + TIME.ACCOUNT_DELETION_GRACE_PERIOD_MS);
       const daysRemaining = Math.ceil((deletionScheduledAt - Date.now()) / (24 * 60 * 60 * 1000));
       
       Alert.alert(
@@ -101,7 +102,7 @@ export default function MoreScreen() {
       // 탈퇴 요청
       Alert.alert(
         '회원탈퇴',
-        '정말 회원탈퇴를 하시겠습니까?\n\n탈퇴 후 30일 동안 계정이 보관되며, 30일 이내에 다시 로그인하시면 탈퇴가 취소됩니다.\n30일 후 계정이 완전히 삭제됩니다.',
+        '정말 회원탈퇴를 하시겠습니까?\n\n• 탈퇴 후 30일 동안 계정이 보관됩니다\n• 30일 이내에 다시 로그인하시면 탈퇴가 취소됩니다\n• 30일 후 계정이 완전히 삭제됩니다',
         [
           {
             text: '취소',
@@ -143,7 +144,7 @@ export default function MoreScreen() {
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>더보기</Text>
-        <Text style={styles.subtitle}>안녕하세요, {currentUser.name}님</Text>
+        <Text style={styles.subtitle}>설정과 기능을 관리하세요</Text>
       </View>
       <ScrollView style={styles.content}>
         <View style={[styles.section, styles.firstSection]}>
@@ -156,7 +157,7 @@ export default function MoreScreen() {
             >
               <View style={styles.attendanceContent}>
                 <Text style={[styles.menuText, styles.attendanceText]}>출석체크</Text>
-                <Text style={styles.attendanceSubtext}>50포인트 받기</Text>
+                <Text style={styles.attendanceSubtext}>{POINTS.ATTENDANCE_REWARD}포인트 받기</Text>
               </View>
             </TouchableOpacity>
           )}
@@ -186,13 +187,6 @@ export default function MoreScreen() {
             onPress={() => navigation.navigate('NotificationSettings')}
           >
             <Text style={styles.menuText}>알림 설정</Text>
-            <Text style={styles.menuArrow}>›</Text>
-          </TouchableOpacity>
-          <TouchableOpacity 
-            style={styles.menuItem}
-            onPress={() => navigation.navigate('NotificationTest')}
-          >
-            <Text style={styles.menuText}>알림 테스트</Text>
             <Text style={styles.menuArrow}>›</Text>
           </TouchableOpacity>
           <TouchableOpacity 
@@ -305,7 +299,7 @@ const styles = StyleSheet.create({
     color: '#888',
   },
   logoutText: {
-    color: '#F04438',
+    color: '#DC2626',
     fontWeight: '600',
   },
   deleteText: {

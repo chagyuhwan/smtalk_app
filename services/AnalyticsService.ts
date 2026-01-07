@@ -1,33 +1,58 @@
 /**
  * Firebase Analytics 서비스
  * 사용자 행동 분석 및 이벤트 추적
+ * 
+ * 주의: React Native 환경에서는 웹 SDK가 작동하지 않으므로
+ * 웹 플랫폼에서만 초기화됩니다.
  */
 
 import { getAnalytics, logEvent, setUserProperties, setUserId, Analytics } from 'firebase/analytics';
 import { app } from '../config/firebase';
+import { Platform } from 'react-native';
 
 class AnalyticsService {
   private analytics: Analytics | null = null;
   private initialized = false;
 
   /**
+   * Analytics 초기화 상태 확인
+   */
+  isInitialized(): boolean {
+    return this.initialized;
+  }
+
+  /**
+   * 현재 플랫폼에서 Analytics 사용 가능 여부
+   */
+  isAvailable(): boolean {
+    return Platform.OS === 'web';
+  }
+
+  /**
    * Analytics 초기화
+   * 웹 환경에서만 작동합니다 (React Native에서는 비활성화)
    */
   initialize(): void {
     try {
-      // 웹 환경에서는 Analytics가 자동으로 초기화됨
-      // React Native에서는 네이티브 모듈이 필요하지만, 
-      // Expo에서는 자동으로 처리됨
-      if (typeof window !== 'undefined') {
+      // 웹 환경에서만 Analytics 초기화
+      // React Native에서는 DOM이 없어서 getAnalytics가 에러를 발생시킴
+      if (Platform.OS === 'web' && typeof window !== 'undefined' && typeof document !== 'undefined') {
         this.analytics = getAnalytics(app);
         this.initialized = true;
-        console.log('Firebase Analytics 초기화 완료');
+        if (__DEV__) {
+          console.log('Firebase Analytics 초기화 완료 (웹 환경)');
+        }
       } else {
-        console.warn('Analytics는 웹 환경에서만 사용 가능합니다.');
+        // React Native 환경에서는 Analytics를 사용하지 않음
+        if (__DEV__) {
+          console.log('Firebase Analytics는 웹 환경에서만 사용 가능합니다.');
+        }
       }
-    } catch (error) {
-      console.error('Analytics 초기화 실패:', error);
+    } catch (error: any) {
       // Analytics 초기화 실패해도 앱은 정상 작동
+      if (__DEV__) {
+        console.warn('Analytics 초기화 실패 (무시됨):', error?.message || error);
+      }
     }
   }
 
@@ -204,9 +229,15 @@ class AnalyticsService {
 
 export const analyticsService = new AnalyticsService();
 
-// 앱 시작 시 Analytics 초기화
-if (typeof window !== 'undefined') {
+// 앱 시작 시 Analytics 초기화 (웹 환경에서만)
+// React Native에서는 자동으로 건너뜀
+if (Platform.OS === 'web') {
   analyticsService.initialize();
 }
+
+
+
+
+
 
 

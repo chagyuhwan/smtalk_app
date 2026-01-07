@@ -20,10 +20,18 @@ import {
   onSnapshot,
   QuerySnapshot,
   DocumentData,
+  writeBatch,
 } from 'firebase/firestore';
+import { Platform } from 'react-native';
 import { db, auth } from '../config/firebase';
 import { User, Post, Report, ChatRoom, Message, Purchase, Region, BDSMPreference } from '../types';
 import { firebaseStorageService } from './FirebaseStorageService';
+import { REGION_COORDINATES } from '../utils/regions';
+import { POINTS } from '../constants';
+
+// 기본 지역: 서울
+const DEFAULT_REGION: Region = 'seoul';
+const DEFAULT_LOCATION = REGION_COORDINATES[DEFAULT_REGION];
 
 class FirebaseFirestoreService {
   // bdsmPreference가 단일 값인 경우 배열로 변환 (기존 데이터 호환성)
@@ -38,6 +46,83 @@ class FirebaseFirestoreService {
       return [pref as BDSMPreference];
     }
     return undefined;
+  }
+
+  /**
+   * suspendedUntil 필드 처리 (Long 또는 Timestamp)
+   */
+  private parseSuspendedUntil(data: any): number | undefined {
+    if (!data.suspendedUntil) return undefined;
+    if (data.suspendedUntil.toMillis) {
+      return data.suspendedUntil.toMillis();
+    }
+    if (typeof data.suspendedUntil === 'number') {
+      return data.suspendedUntil;
+    }
+    return undefined;
+  }
+
+  /**
+   * Firestore 문서 데이터를 User 객체로 변환
+   */
+  private transformUserData(
+    docId: string,
+    data: DocumentData,
+    options: {
+      includePoints?: boolean;
+      includeBlockedUsers?: boolean;
+      includeLastSeen?: boolean;
+    } = {}
+  ): User {
+    const {
+      includePoints = false,
+      includeBlockedUsers = false,
+      includeLastSeen = true,
+    } = options;
+
+    return {
+      id: docId,
+      name: data.name,
+      avatar: data.avatar,
+      gender: data.gender,
+      age: data.age,
+      location: data.latitude && data.longitude
+        ? { latitude: data.latitude, longitude: data.longitude }
+        : undefined,
+      region: data.region,
+      isAdmin: data.isAdmin || false,
+      bdsmPreference: this.normalizeBdsmPreference(data.bdsmPreference),
+      bio: data.bio,
+      deletionRequestedAt: data.deletionRequestedAt?.toMillis(),
+      deletionScheduledAt: data.deletionScheduledAt?.toMillis(),
+      lastAttendanceDate: data.lastAttendanceDate,
+      lastPostRewardDate: data.lastPostRewardDate,
+      suspendedUntil: this.parseSuspendedUntil(data),
+      suspensionType: data.suspensionType,
+      likeCount: data.likeCount || 0,
+      likedBy: data.likedBy || {},
+      lastSeen: includeLastSeen
+        ? (data.updatedAt?.toMillis() || data.createdAt?.toMillis() || undefined)
+        : undefined,
+      ...(includePoints && { points: data.points !== undefined ? data.points : POINTS.DEFAULT }),
+      ...(includeBlockedUsers && { blockedUsers: data.blockedUsers || {} }),
+    };
+  }
+
+  /**
+   * 사용자 필터링 (탈퇴 예정, 운영자 제외 등)
+   */
+  private shouldExcludeUser(
+    docId: string,
+    data: DocumentData,
+    excludeUserId?: string
+  ): boolean {
+    const shouldExclude = excludeUserId && docId === excludeUserId;
+    const isDeletionScheduled = data.deletionScheduledAt && data.deletionScheduledAt.toMillis() <= Date.now();
+    const isDeletionRequested = data.deletionRequestedAt;
+    const isAdmin = data.isAdmin || false;
+    
+    return !!(shouldExclude || isDeletionRequested || isDeletionScheduled || isAdmin);
   }
   // 컬렉션 이름
   private readonly COLLECTIONS = {
@@ -72,6 +157,7 @@ class FirebaseFirestoreService {
     deletionRequestedAt?: number;
     deletionScheduledAt?: number;
     lastAttendanceDate?: string;
+    lastPostRewardDate?: string; // 마지막 게시글 포인트 지급 날짜 (YYYY-MM-DD 형식)
     blockedUsers?: Record<string, number>; // 차단된 사용자 목록 (userId -> blockedAt timestamp)
   }): Promise<void> {
     try {
@@ -81,10 +167,23 @@ class FirebaseFirestoreService {
       const userDoc = await getDoc(userRef);
       const isNewUser = !userDoc.exists();
       
+      // phoneNumber 검증: 빈 문자열이거나 공백만 있는 경우 기존 문서의 phoneNumber 사용
+      let phoneNumberToSave = userData.phoneNumber?.trim() || '';
+      if (!phoneNumberToSave && !isNewUser && userDoc.exists()) {
+        const existingData = userDoc.data();
+        phoneNumberToSave = existingData?.phoneNumber || '';
+        console.warn('phoneNumber가 비어있어 기존 값 사용:', phoneNumberToSave);
+      }
+      
+      // phoneNumber가 여전히 비어있으면 에러
+      if (!phoneNumberToSave) {
+        throw new Error('phoneNumber는 필수 필드입니다.');
+      }
+      
       // undefined 필드를 제거하여 Firestore 오류 방지
       const cleanedData: any = {
         id: userData.id,
-        phoneNumber: userData.phoneNumber,
+        phoneNumber: phoneNumberToSave,
         name: userData.name,
         updatedAt: Timestamp.now(),
       };
@@ -134,6 +233,9 @@ class FirebaseFirestoreService {
       if (userData.lastAttendanceDate !== undefined) {
         cleanedData.lastAttendanceDate = userData.lastAttendanceDate;
       }
+      if (userData.lastPostRewardDate !== undefined) {
+        cleanedData.lastPostRewardDate = userData.lastPostRewardDate;
+      }
       if (userData.blockedUsers !== undefined) {
         cleanedData.blockedUsers = userData.blockedUsers;
       }
@@ -158,41 +260,9 @@ class FirebaseFirestoreService {
       }
 
       const data = userSnap.data();
-      
-      // suspendedUntil 필드 처리 (Long 또는 Timestamp)
-      let suspendedUntil: number | undefined = undefined;
-      if (data.suspendedUntil) {
-        if (data.suspendedUntil.toMillis) {
-          // Timestamp 타입
-          suspendedUntil = data.suspendedUntil.toMillis();
-        } else if (typeof data.suspendedUntil === 'number') {
-          // Long 타입
-          suspendedUntil = data.suspendedUntil;
-        }
-      }
-      
-      return {
-        id: userSnap.id,
-        name: data.name,
-        avatar: data.avatar,
-        gender: data.gender,
-        age: data.age,
-        location: data.latitude && data.longitude
-          ? { latitude: data.latitude, longitude: data.longitude }
-          : undefined,
-        region: data.region,
-        isAdmin: data.isAdmin || false,
-        points: data.points || 0, // 포인트 정보 포함
-        bdsmPreference: data.bdsmPreference,
-        bio: data.bio,
-        deletionRequestedAt: data.deletionRequestedAt?.toMillis(),
-        deletionScheduledAt: data.deletionScheduledAt?.toMillis(),
-        lastAttendanceDate: data.lastAttendanceDate,
-        suspendedUntil: suspendedUntil,
-        suspensionType: data.suspensionType,
-        likeCount: data.likeCount || 0,
-        likedBy: data.likedBy || {},
-      };
+      return this.transformUserData(userSnap.id, data, {
+        includeLastSeen: true,
+      });
     } catch (error) {
       console.error('사용자 조회 오류:', error);
       throw error;
@@ -217,42 +287,11 @@ class FirebaseFirestoreService {
         }
 
         const data = snapshot.data();
-        
-        // suspendedUntil 필드 처리 (Long 또는 Timestamp)
-        let suspendedUntil: number | undefined = undefined;
-        if (data.suspendedUntil) {
-          if (data.suspendedUntil.toMillis) {
-            // Timestamp 타입
-            suspendedUntil = data.suspendedUntil.toMillis();
-          } else if (typeof data.suspendedUntil === 'number') {
-            // Long 타입
-            suspendedUntil = data.suspendedUntil;
-          }
-        }
-        
-        const user: User = {
-          id: snapshot.id,
-          name: data.name,
-          avatar: data.avatar,
-          gender: data.gender,
-          age: data.age,
-          location: data.latitude && data.longitude
-            ? { latitude: data.latitude, longitude: data.longitude }
-            : undefined,
-          region: data.region,
-          isAdmin: data.isAdmin || false,
-          bdsmPreference: this.normalizeBdsmPreference(data.bdsmPreference),
-          bio: data.bio,
-          deletionRequestedAt: data.deletionRequestedAt?.toMillis(),
-          deletionScheduledAt: data.deletionScheduledAt?.toMillis(),
-          lastAttendanceDate: data.lastAttendanceDate,
-          suspendedUntil: suspendedUntil,
-          suspensionType: data.suspensionType,
-          likeCount: data.likeCount || 0,
-          likedBy: data.likedBy || {},
-        };
-        const points = data.points !== undefined ? data.points : 100; // 기본값 100
-        const blockedUsers = data.blockedUsers || {}; // 차단된 사용자 목록
+        const user = this.transformUserData(snapshot.id, data, {
+          includeLastSeen: true,
+        });
+        const points = data.points !== undefined ? data.points : POINTS.DEFAULT;
+        const blockedUsers = data.blockedUsers || {};
         console.log('사용자 정보 실시간 업데이트:', user.id, user.name, user.location, '지역:', user.region, '포인트:', points, '차단된 사용자:', Object.keys(blockedUsers).length, '명');
         callback(user, points, blockedUsers);
       },
@@ -277,44 +316,19 @@ class FirebaseFirestoreService {
       const users = querySnapshot.docs
         .filter((doc) => {
           const data = doc.data();
-          const shouldExclude = excludeUserId && doc.id === excludeUserId;
-          // 탈퇴 예정 사용자 제외
-          const isDeletionScheduled = data.deletionScheduledAt && data.deletionScheduledAt.toMillis() <= Date.now();
-          const isDeletionRequested = data.deletionRequestedAt; // 탈퇴 요청된 사용자도 제외
-          const isAdmin = data.isAdmin || false; // 운영자 계정 제외
+          const shouldExclude = this.shouldExcludeUser(doc.id, data, excludeUserId);
           
           if (shouldExclude) {
             console.log('사용자 제외:', doc.id);
           }
-          if (isDeletionRequested) {
-            console.log('탈퇴 예정 사용자 제외:', doc.id);
-          }
-          if (isAdmin) {
-            console.log('운영자 계정 제외:', doc.id);
-          }
           
-          return !shouldExclude && !isDeletionRequested && !isDeletionScheduled && !isAdmin;
+          return !shouldExclude;
         })
         .map((doc) => {
           const data = doc.data();
-          const user = {
-            id: doc.id,
-            name: data.name,
-            avatar: data.avatar,
-            gender: data.gender,
-            age: data.age,
-            location: data.latitude && data.longitude
-              ? { latitude: data.latitude, longitude: data.longitude }
-              : undefined,
-            region: data.region,
-            isAdmin: data.isAdmin || false,
-            bdsmPreference: this.normalizeBdsmPreference(data.bdsmPreference),
-            bio: data.bio,
-            deletionRequestedAt: data.deletionRequestedAt?.toMillis(),
-            deletionScheduledAt: data.deletionScheduledAt?.toMillis(),
-            lastAttendanceDate: data.lastAttendanceDate,
-            likeCount: data.likeCount || 0,
-          };
+          const user = this.transformUserData(doc.id, data, {
+            includeLastSeen: true,
+          });
           console.log('사용자 매핑:', user.id, user.name);
           return user;
         });
@@ -344,34 +358,13 @@ class FirebaseFirestoreService {
         const users: User[] = snapshot.docs
           .filter((doc) => {
             const data = doc.data();
-            const shouldExclude = excludeUserId && doc.id === excludeUserId;
-            // 탈퇴 예정 사용자 제외
-            const isDeletionScheduled = data.deletionScheduledAt && data.deletionScheduledAt.toMillis() <= Date.now();
-            const isDeletionRequested = data.deletionRequestedAt; // 탈퇴 요청된 사용자도 제외
-            const isAdmin = data.isAdmin || false; // 운영자 계정 제외
-            
-            return !shouldExclude && !isDeletionRequested && !isDeletionScheduled && !isAdmin;
+            return !this.shouldExcludeUser(doc.id, data, excludeUserId);
           })
           .map((doc) => {
             const data = doc.data();
-            return {
-              id: doc.id,
-              name: data.name,
-              avatar: data.avatar,
-              gender: data.gender,
-              age: data.age,
-              location: data.latitude && data.longitude
-                ? { latitude: data.latitude, longitude: data.longitude }
-                : undefined,
-              region: data.region,
-              isAdmin: data.isAdmin || false,
-              bdsmPreference: this.normalizeBdsmPreference(data.bdsmPreference),
-              bio: data.bio,
-              deletionRequestedAt: data.deletionRequestedAt?.toMillis(),
-              deletionScheduledAt: data.deletionScheduledAt?.toMillis(),
-              lastAttendanceDate: data.lastAttendanceDate,
-              likeCount: data.likeCount || 0,
-            };
+            return this.transformUserData(doc.id, data, {
+              includeLastSeen: true,
+            });
           });
         console.log('사용자 목록 실시간 업데이트:', users.length, '명');
         callback(users);
@@ -639,6 +632,51 @@ class FirebaseFirestoreService {
 
   // ==================== 문의 관리 ====================
 
+  // 운영자(고객센터) 사용자 ID
+  private readonly CUSTOMER_SERVICE_USER_ID = 'customer_service';
+
+  /**
+   * 운영자(고객센터) 사용자 정보 가져오기 또는 생성
+   */
+  private async getOrCreateCustomerServiceUser(): Promise<User> {
+    try {
+      const adminUser = await this.getUser(this.CUSTOMER_SERVICE_USER_ID);
+      if (adminUser) {
+        return adminUser;
+      }
+
+      // 운영자 사용자가 없으면 생성
+      const adminUserData: User = {
+        id: this.CUSTOMER_SERVICE_USER_ID,
+        name: '운영자',
+        phoneNumber: '',
+        location: DEFAULT_LOCATION,
+        region: DEFAULT_REGION,
+        isAdmin: true,
+      };
+
+      await this.createOrUpdateUser({
+        id: this.CUSTOMER_SERVICE_USER_ID,
+        phoneNumber: '',
+        name: '운영자',
+        isAdmin: true,
+      });
+
+      return adminUserData;
+    } catch (error) {
+      console.error('운영자 사용자 생성/조회 오류:', error);
+      // 실패해도 기본 정보 반환
+      return {
+        id: this.CUSTOMER_SERVICE_USER_ID,
+        name: '운영자',
+        phoneNumber: '',
+        location: DEFAULT_LOCATION,
+        region: DEFAULT_REGION,
+        isAdmin: true,
+      };
+    }
+  }
+
   /**
    * 문의 생성
    */
@@ -657,11 +695,103 @@ class FirebaseFirestoreService {
         createdAt: Timestamp.now(),
       });
       console.log('문의 생성 완료:', inquiryRef.id);
+
+      // 운영자와의 채팅방 생성 및 문의 내용을 메시지로 저장
+      try {
+        const adminUser = await this.getOrCreateCustomerServiceUser();
+        const chatRoomId = await this.getOrCreateChatRoom(inquiryData.userId, this.CUSTOMER_SERVICE_USER_ID);
+        
+        // 문의 내용을 메시지로 저장
+        await this.sendMessage({
+          chatRoomId,
+          senderId: inquiryData.userId,
+          receiverId: this.CUSTOMER_SERVICE_USER_ID,
+          text: inquiryData.content,
+        });
+
+        console.log('문의 채팅방 메시지 저장 완료:', chatRoomId);
+      } catch (error) {
+        console.error('문의 채팅방 생성/메시지 저장 실패:', error);
+        // 실패해도 문의는 생성됨
+      }
+
       return inquiryRef.id;
     } catch (error) {
       console.error('문의 생성 오류:', error);
       throw error;
     }
+  }
+
+  /**
+   * 문의 답변을 채팅방에 메시지로 추가
+   */
+  async addInquiryAnswerToChat(inquiryId: string, userId: string, answer: string): Promise<void> {
+    try {
+      // 운영자와의 채팅방 찾기 또는 생성
+      const chatRoomId = await this.getOrCreateChatRoom(userId, this.CUSTOMER_SERVICE_USER_ID);
+      
+      // 답변을 메시지로 저장 (운영자가 보낸 메시지)
+      await this.sendMessage({
+        chatRoomId,
+        senderId: this.CUSTOMER_SERVICE_USER_ID,
+        receiverId: userId,
+        text: answer,
+      });
+
+      console.log('문의 답변 채팅방 메시지 저장 완료:', chatRoomId);
+    } catch (error) {
+      console.error('문의 답변 채팅방 메시지 저장 실패:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 사용자의 문의 목록 실시간 구독 (답변 알림용)
+   */
+  subscribeToInquiries(
+    userId: string,
+    callback: (inquiries: Array<{
+      id: string;
+      userId: string;
+      userName: string;
+      content: string;
+      status: 'pending' | 'answered';
+      answer?: string;
+      answeredAt?: number;
+      timestamp: number;
+      createdAt: number;
+    }>) => void
+  ): () => void {
+    const q = query(
+      collection(db, this.COLLECTIONS.INQUIRIES),
+      where('userId', '==', userId)
+    );
+
+    return onSnapshot(
+      q,
+      (snapshot: QuerySnapshot<DocumentData>) => {
+        const inquiries = snapshot.docs.map((doc) => {
+          const data = doc.data();
+          return {
+            id: doc.id,
+            userId: data.userId,
+            userName: data.userName,
+            content: data.content,
+            status: data.status || 'pending',
+            answer: data.answer,
+            answeredAt: data.answeredAt?.toMillis(),
+            timestamp: data.timestamp?.toMillis() || Date.now(),
+            createdAt: data.createdAt?.toMillis() || Date.now(),
+          };
+        });
+        // 클라이언트 측에서 createdAt 기준으로 내림차순 정렬
+        inquiries.sort((a, b) => b.createdAt - a.createdAt);
+        callback(inquiries);
+      },
+      (error) => {
+        console.error('문의 구독 오류:', error);
+      }
+    );
   }
 
   // ==================== 신고 관리 ====================
@@ -988,6 +1118,36 @@ class FirebaseFirestoreService {
             console.error('마지막 메시지 조회 오류:', error);
           }
           
+          // 읽지 않은 메시지 수 계산 (Firestore에 저장된 값 우선 사용)
+          let unreadCount = 0;
+          if (data.unreadCounts && typeof data.unreadCounts === 'object') {
+            unreadCount = data.unreadCounts[userId] || 0;
+          } else {
+            // unreadCounts가 없으면 직접 계산
+            try {
+              const unreadQuery = query(
+                collection(db, this.COLLECTIONS.CHAT_ROOMS, doc.id, 'messages'),
+                where('receiverId', '==', userId),
+                where('read', '==', false)
+              );
+              const unreadSnapshot = await getDocs(unreadQuery);
+              unreadCount = unreadSnapshot.size;
+              
+              // 계산한 값을 Firestore에 저장 (비동기, 실패해도 계속 진행)
+              const roomRef = doc(db, this.COLLECTIONS.CHAT_ROOMS, doc.id);
+              updateDoc(roomRef, {
+                unreadCounts: { [userId]: unreadCount },
+                updatedAt: Timestamp.now(),
+              }).catch((error) => {
+                console.warn('unreadCounts 저장 실패:', error);
+              });
+            } catch (error) {
+              // 인덱스가 없거나 다른 오류가 발생하면 0으로 설정
+              console.warn('읽지 않은 메시지 수 계산 오류:', error);
+              unreadCount = 0;
+            }
+          }
+          
           const pinnedBy = data.pinnedBy || {};
           
           rooms.push({
@@ -995,7 +1155,7 @@ class FirebaseFirestoreService {
             participants: participants as [string, string],
             participantsInfo,
             lastMessage,
-            unreadCount: 0, // TODO: 읽지 않은 메시지 수 계산
+            unreadCount,
             pinnedBy: pinnedBy,
           });
         }
@@ -1132,6 +1292,7 @@ class FirebaseFirestoreService {
     senderId: string;
     receiverId: string;
     text: string;
+    images?: string[];
   }): Promise<string> {
     try {
       console.log('메시지 저장 시작:', {
@@ -1139,21 +1300,83 @@ class FirebaseFirestoreService {
         senderId: messageData.senderId,
         receiverId: messageData.receiverId,
         text: messageData.text.substring(0, 50) + (messageData.text.length > 50 ? '...' : ''),
+        imageCount: messageData.images?.length || 0,
       });
+
+      const messageDataToSave: any = {
+        ...messageData,
+        timestamp: Timestamp.now(),
+        read: false,
+      };
+
+      // images가 있으면 추가
+      if (messageData.images && messageData.images.length > 0) {
+        messageDataToSave.images = messageData.images;
+      }
 
       const messageRef = await addDoc(
         collection(db, this.COLLECTIONS.CHAT_ROOMS, messageData.chatRoomId, 'messages'),
-        {
-          ...messageData,
-          timestamp: Timestamp.now(),
-          read: false,
-        }
+        messageDataToSave
       );
 
       console.log('메시지 저장 성공:', {
         messageId: messageRef.id,
         chatRoomId: messageData.chatRoomId,
         timestamp: new Date().toISOString(),
+      });
+
+      // 채팅방의 unreadCounts 업데이트 (비동기, 실패해도 메시지 전송은 성공)
+      const roomRef = doc(db, this.COLLECTIONS.CHAT_ROOMS, messageData.chatRoomId);
+      getDoc(roomRef).then((roomDoc) => {
+        if (roomDoc.exists()) {
+          const roomData = roomDoc.data();
+          const unreadCounts = roomData.unreadCounts || {};
+          const currentCount = unreadCounts[messageData.receiverId] || 0;
+          unreadCounts[messageData.receiverId] = currentCount + 1;
+          
+          updateDoc(roomRef, {
+            unreadCounts,
+            updatedAt: Timestamp.now(),
+          }).catch((error) => {
+            console.warn('unreadCounts 업데이트 실패:', error);
+          });
+        }
+      }).catch((error) => {
+        console.warn('채팅방 조회 실패:', error);
+      });
+
+      // 푸시 알림 전송 (비동기, 실패해도 메시지 전송은 성공)
+      // 백그라운드/종료 상태에서도 알림을 받기 위해 항상 전송
+      // 메시지가 성공적으로 저장된 후에만 푸시 알림 전송
+      // 중요: 백그라운드에서도 알림을 받으려면 반드시 Expo Push API를 통해 전송해야 함
+      console.log('[메시지 전송] 푸시 알림 전송 시작 (백그라운드 지원):', {
+        receiverId: messageData.receiverId,
+        senderId: messageData.senderId,
+        chatRoomId: messageData.chatRoomId,
+        messageId: messageRef.id,
+        messageText: messageData.text.substring(0, 30) + '...',
+      });
+      
+      // 백그라운드/종료 상태에서도 알림을 받기 위해 항상 Expo Push API를 통해 전송
+      // 로컬 알림은 포그라운드에서만 작동하므로, 백그라운드에서는 반드시 서버 푸시 사용
+      this.sendPushNotificationToReceiver(
+        messageData.receiverId, 
+        messageData.senderId, 
+        messageData.text, 
+        messageData.chatRoomId
+      ).then(() => {
+        console.log('[메시지 전송] 푸시 알림 전송 완료:', {
+          receiverId: messageData.receiverId,
+          chatRoomId: messageData.chatRoomId,
+        });
+      }).catch((error) => {
+        console.error('[메시지 전송] 푸시 알림 전송 실패:', {
+          error: error.message,
+          errorStack: error.stack,
+          receiverId: messageData.receiverId,
+          senderId: messageData.senderId,
+          chatRoomId: messageData.chatRoomId,
+        });
       });
 
       return messageRef.id;
@@ -1165,6 +1388,191 @@ class FirebaseFirestoreService {
         chatRoomId: messageData.chatRoomId,
       });
       throw error;
+    }
+  }
+
+  /**
+   * 수신자에게 푸시 알림 전송
+   */
+  private async sendPushNotificationToReceiver(
+    receiverId: string,
+    senderId: string,
+    messageText: string,
+    chatRoomId: string
+  ): Promise<void> {
+    try {
+      console.log('[푸시 알림] 전송 시작:', { 
+        receiverId, 
+        senderId, 
+        chatRoomId,
+        messageText: messageText.substring(0, 30) + '...',
+      });
+      
+      // 수신자 정보 가져오기
+      const receiverDoc = await getDoc(doc(db, this.COLLECTIONS.USERS, receiverId));
+      if (!receiverDoc.exists()) {
+        console.warn('[푸시 알림] 수신자 정보를 찾을 수 없습니다:', receiverId);
+        return;
+      }
+
+      const receiverData = receiverDoc.data();
+      const expoPushToken = receiverData.expoPushToken;
+
+      console.log('[푸시 알림] 수신자 토큰 확인:', { 
+        receiverId, 
+        receiverName: receiverData.name,
+        hasToken: !!expoPushToken,
+        tokenPreview: expoPushToken ? expoPushToken.substring(0, 30) + '...' : '없음',
+        tokenLength: expoPushToken ? expoPushToken.length : 0,
+      });
+
+      if (!expoPushToken) {
+        console.warn('[푸시 알림] 수신자의 푸시 토큰이 없습니다. 푸시 알림을 전송할 수 없습니다:', {
+          receiverId,
+          receiverName: receiverData.name,
+        });
+        return;
+      }
+      
+      // 푸시 토큰 형식 확인 (Expo Push Token은 "ExponentPushToken[...]" 형식)
+      if (!expoPushToken.startsWith('ExponentPushToken[') && !expoPushToken.startsWith('ExpoPushToken[')) {
+        console.warn('[푸시 알림] 잘못된 푸시 토큰 형식:', {
+          receiverId,
+          tokenPreview: expoPushToken.substring(0, 50),
+        });
+        // 형식이 잘못되었어도 전송 시도 (Expo가 자동으로 처리할 수 있음)
+      }
+
+      // 발신자 정보 가져오기
+      const senderDoc = await getDoc(doc(db, this.COLLECTIONS.USERS, senderId));
+      const senderName = senderDoc.exists() ? senderDoc.data().name : '알 수 없음';
+
+      // 메시지 텍스트가 너무 길면 잘라내기
+      const truncatedText = messageText.length > 50 
+        ? messageText.substring(0, 50) + '...' 
+        : messageText;
+
+      // Expo Push API 페이로드 생성
+      // 백그라운드/종료 상태에서도 알림이 표시되도록 올바른 형식으로 설정
+      const pushPayload: any = {
+        to: expoPushToken,
+        sound: 'default',
+        title: senderName,
+        body: truncatedText,
+        data: {
+          chatRoomId,
+          type: 'message',
+        },
+        badge: 1, // iOS 배지 업데이트
+        priority: 'high', // 백그라운드 알림을 위해 필수 (Android & iOS)
+      };
+
+      // Android 설정
+      if (Platform.OS === 'android') {
+        pushPayload.channelId = 'messages'; // Android 8.0+ 알림 채널
+      }
+      
+      // iOS도 priority를 명시적으로 설정 (백그라운드 알림을 위해)
+      // priority: 'high'는 이미 설정됨
+
+      console.log('[푸시 알림] Expo Push API 호출:', {
+        to: expoPushToken.substring(0, 20) + '...',
+        title: senderName,
+        body: truncatedText.substring(0, 30) + '...',
+        platform: Platform.OS,
+        priority: pushPayload.priority,
+        channelId: pushPayload.channelId,
+        payload: JSON.stringify(pushPayload).substring(0, 200),
+      });
+
+      // Expo Push API 호출
+      // 백그라운드/종료 상태에서도 알림을 받기 위해 반드시 호출해야 함
+      console.log('[푸시 알림] Expo Push API 호출 시작 (백그라운드 지원):', {
+        url: 'https://exp.host/--/api/v2/push/send',
+        tokenLength: expoPushToken.length,
+        payloadSize: JSON.stringify(pushPayload).length,
+      });
+      
+      const response = await fetch('https://exp.host/--/api/v2/push/send', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'Accept-Encoding': 'gzip, deflate',
+        },
+        body: JSON.stringify(pushPayload),
+      });
+
+      const responseText = await response.text();
+      console.log('[푸시 알림] API 응답:', {
+        status: response.status,
+        statusText: response.statusText,
+        response: responseText.substring(0, 500),
+      });
+
+      if (!response.ok) {
+        throw new Error(`푸시 알림 전송 실패: ${response.status} - ${responseText}`);
+      }
+
+      // Expo Push API는 배열 또는 객체를 반환할 수 있음
+      let result;
+      try {
+        result = JSON.parse(responseText);
+      } catch (parseError) {
+        console.error('[푸시 알림] JSON 파싱 오류:', parseError);
+        throw new Error(`푸시 알림 응답 파싱 실패: ${responseText}`);
+      }
+
+      // 배열인 경우 첫 번째 요소 확인
+      const resultData = Array.isArray(result) ? result[0] : result;
+      
+      console.log('[푸시 알림] 전송 결과 (상세):', {
+        success: resultData.status === 'ok',
+        status: resultData.status,
+        id: resultData.id,
+        message: resultData.message,
+        details: resultData.details,
+        fullResponse: JSON.stringify(resultData).substring(0, 500),
+      });
+      
+      // 결과 확인
+      if (resultData.status === 'error') {
+        console.error('[푸시 알림] ❌ Expo Push 서비스 오류:', {
+          message: resultData.message,
+          details: resultData.details,
+          errorCode: resultData.details?.error,
+          receiverId,
+          senderId,
+          expoPushToken: expoPushToken.substring(0, 30) + '...',
+        });
+        
+        // 특정 에러 코드에 대한 안내
+        if (resultData.details?.error === 'DeviceNotRegistered') {
+          console.error('[푸시 알림] ⚠️ 디바이스가 등록되지 않았습니다. 수신자가 앱을 재설치했거나 푸시 토큰이 만료되었을 수 있습니다.');
+        } else if (resultData.details?.error === 'InvalidCredentials') {
+          console.error('[푸시 알림] ⚠️ 잘못된 자격 증명입니다. Expo 프로젝트 설정을 확인하세요.');
+        }
+      } else if (resultData.status === 'ok') {
+        console.log('[푸시 알림] ✅ 전송 성공 (백그라운드 지원):', {
+          ticketId: resultData.id,
+          receiverId,
+          senderId,
+          message: '백그라운드/종료 상태에서도 알림이 표시되어야 합니다.',
+        });
+      } else {
+        console.warn('[푸시 알림] ⚠️ 알 수 없는 상태:', {
+          status: resultData.status,
+          fullResponse: JSON.stringify(resultData),
+        });
+      }
+    } catch (error: any) {
+      console.error('[푸시 알림] 전송 오류:', {
+        message: error.message,
+        stack: error.stack,
+        receiverId,
+        senderId,
+      });
+      // 푸시 알림 실패는 메시지 전송에 영향을 주지 않도록 조용히 처리
     }
   }
 
@@ -1184,11 +1592,12 @@ class FirebaseFirestoreService {
         const data = doc.data();
         return {
           id: doc.id,
-          text: data.text,
+          text: data.text || '',
           senderId: data.senderId,
           receiverId: data.receiverId,
           timestamp: data.timestamp?.toMillis() || Date.now(),
           read: data.read || false,
+          images: data.images || undefined,
         };
       }).reverse(); // 시간순 정렬
     } catch (error) {
@@ -1220,11 +1629,12 @@ class FirebaseFirestoreService {
             const data = doc.data();
             return {
               id: doc.id,
-              text: data.text,
+              text: data.text || '',
               senderId: data.senderId,
               receiverId: data.receiverId,
               timestamp: data.timestamp?.toMillis() || Date.now(),
               read: data.read || false,
+              images: data.images || undefined,
             };
           }).reverse();
           callback(messages);
@@ -1262,6 +1672,65 @@ class FirebaseFirestoreService {
       callback([]);
       // 빈 함수 반환 (구독 해제 시 오류 방지)
       return () => {};
+    }
+  }
+
+  /**
+   * 메시지 읽음 상태 업데이트 (채팅방의 모든 읽지 않은 메시지를 읽음으로 표시)
+   */
+  async markMessagesAsRead(chatRoomId: string, userId: string): Promise<void> {
+    try {
+      console.log('[메시지 읽음] 시작:', { chatRoomId, userId });
+      
+      // 해당 채팅방의 읽지 않은 메시지 조회
+      const q = query(
+        collection(db, this.COLLECTIONS.CHAT_ROOMS, chatRoomId, 'messages'),
+        where('receiverId', '==', userId),
+        where('read', '==', false)
+      );
+      
+      const querySnapshot = await getDocs(q);
+      
+      if (querySnapshot.empty) {
+        console.log('[메시지 읽음] 읽을 메시지 없음:', chatRoomId);
+        return;
+      }
+      
+      // 배치 업데이트로 모든 읽지 않은 메시지를 읽음으로 표시
+      const batch = writeBatch(db);
+      let updateCount = 0;
+      
+      querySnapshot.docs.forEach((doc) => {
+        batch.update(doc.ref, { read: true });
+        updateCount++;
+      });
+      
+      await batch.commit();
+      console.log('[메시지 읽음] 완료:', { chatRoomId, updateCount });
+      
+      // 채팅방의 unreadCount 업데이트
+      const roomRef = doc(db, this.COLLECTIONS.CHAT_ROOMS, chatRoomId);
+      const roomDoc = await getDoc(roomRef);
+      
+      if (roomDoc.exists()) {
+        const roomData = roomDoc.data();
+        const unreadCounts = roomData.unreadCounts || {};
+        unreadCounts[userId] = 0;
+        
+        await updateDoc(roomRef, {
+          unreadCounts,
+          updatedAt: Timestamp.now(),
+        });
+        console.log('[메시지 읽음] 채팅방 unreadCount 업데이트 완료:', chatRoomId);
+      }
+    } catch (error: any) {
+      console.error('[메시지 읽음] 오류:', {
+        chatRoomId,
+        userId,
+        error: error.message,
+        code: error.code,
+      });
+      // 읽음 상태 업데이트 실패는 치명적이지 않으므로 조용히 처리
     }
   }
 
@@ -1701,6 +2170,24 @@ class FirebaseFirestoreService {
       console.log('푸시 토큰 업데이트 완료:', userId, pushToken ? '토큰 저장' : '토큰 제거');
     } catch (error) {
       console.error('푸시 토큰 업데이트 오류:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 사용자 필드 업데이트 (단일 필드 업데이트용)
+   */
+  async updateUserField(userId: string, field: string, value: any): Promise<void> {
+    try {
+      const userRef = doc(db, this.COLLECTIONS.USERS, userId);
+      const updateData: any = {
+        [field]: value,
+        updatedAt: Timestamp.now(),
+      };
+      await updateDoc(userRef, updateData);
+      console.log(`사용자 필드 업데이트 완료: ${field} = ${value}`);
+    } catch (error) {
+      console.error(`사용자 필드 업데이트 오류 (${field}):`, error);
       throw error;
     }
   }

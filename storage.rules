@@ -1,0 +1,33 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // ==================== 아바타 (avatars) ====================
+    match /avatars/{userId}/{fileName} {
+      // 인증된 사용자는 자신의 아바타를 업로드/삭제할 수 있음
+      allow write: if request.auth != null && request.auth.uid == userId;
+      // 모든 인증된 사용자는 아바타를 읽을 수 있음
+      allow read: if request.auth != null;
+    }
+    
+    // ==================== 게시글 이미지 (posts) ====================
+    match /posts/{postId}/{fileName} {
+      // 인증된 사용자는 게시글 이미지를 업로드할 수 있음
+      allow write: if request.auth != null;
+      // 모든 인증된 사용자는 게시글 이미지를 읽을 수 있음
+      allow read: if request.auth != null;
+    }
+    
+    // ==================== 메시지 이미지 (messages) ====================
+    match /messages/{chatRoomId}/{fileName} {
+      // 참고: Storage 규칙에서 Firestore 문서 참조가 제대로 작동하지 않을 수 있으므로
+      // 일단 모든 인증된 사용자가 업로드할 수 있도록 설정
+      // 읽기는 클라이언트 측에서 채팅방 참가자만 접근하도록 제어
+      // 파일 크기 제한: 10MB
+      allow write: if request.auth != null && request.resource.size < 10 * 1024 * 1024;
+      
+      // 읽기는 인증된 사용자만 가능 (클라이언트 측에서 추가 검증 필요)
+      allow read: if request.auth != null;
+    }
+  }
+}
+

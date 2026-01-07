@@ -8,6 +8,7 @@ import { notificationService } from '../services/NotificationService';
 import { auth } from '../config/firebase';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import { getLocationFromRegion, REGION_COORDINATES } from '../utils/regions';
+import { POINTS, TIME, USER, TEXT } from '../constants';
 
 interface ChatContextType {
   currentUser: User;
@@ -24,11 +25,11 @@ interface ChatContextType {
   getChatPartner: (chatRoomId: string) => User | undefined;
   markAsRead: (chatRoomId: string) => void;
   setCurrentChatRoomId: (chatRoomId: string | null) => void;
-  createPost: (content: string, images?: string[]) => Promise<void>;
+  createPost: (content: string, images?: string[]) => Promise<{ pointsRewarded: boolean }>;
   startChatFromPost: (postId: string) => Promise<string | null>;
   deductPoints: (amount: number) => Promise<boolean>;
   addPoints: (amount: number) => Promise<void>;
-  updateProfile: (name: string, gender?: Gender, avatar?: string, age?: number, bdsmPreference?: BDSMPreference[], bio?: string) => void;
+  updateProfile: (name: string, gender?: Gender, avatar?: string, age?: number, bdsmPreference?: BDSMPreference[], bio?: string, profileImages?: string[]) => void;
   updateRegion: (region: Region) => void;
   getDistance: (user1: User, user2: User) => number | null;
   formatDistance: (distance: number | null) => string;
@@ -81,7 +82,7 @@ const createInitialState = () => {
 export const ChatProvider = ({ children }: { children: ReactNode }) => {
   const [currentUser, setCurrentUser] = useState<User>(DEFAULT_USER);
   const [contacts, setContacts] = useState<User[]>([]); // Firestore에서 로드
-  const [points, setPoints] = useState<number>(100); // 초기 포인트 100
+  const [points, setPoints] = useState<number>(POINTS.INITIAL);
   const [blockedUsers, setBlockedUsers] = useState<Record<string, number>>({}); // 차단된 사용자 목록 (userId -> blockedAt timestamp)
   const [reports, setReports] = useState<Report[]>([]); // 신고 목록
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings | null>(null); // 알림 설정
@@ -97,6 +98,8 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
   const currentChatRoomIdRef = useRef<string | null>(null);
   // 이전 메시지 타임스탬프 추적 (중복 알림 방지)
   const lastMessageTimestampsRef = useRef<Record<string, number>>({});
+  // 메시지 구독 해제 함수들을 저장할 Map
+  const messageUnsubscribesRef = useRef<Map<string, () => void>>(new Map());
 
   // 앱 시작 시 기본 지역(서울) 설정 및 알림 권한 요청
   useEffect(() => {
@@ -128,6 +131,14 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       if (nextAppState === 'active') {
         // 앱이 포그라운드로 돌아오면 배지 초기화
         notificationService.clearBadge();
+        
+        // 포그라운드로 돌아올 때 푸시 토큰 재등록 (토큰이 변경되었을 수 있음)
+        if (auth.currentUser) {
+          console.log('[앱 상태] 포그라운드로 돌아옴 - 푸시 토큰 재등록');
+          notificationService.registerForPushNotifications().catch((error) => {
+            console.error('[앱 상태] 푸시 토큰 재등록 실패:', error);
+          });
+        }
       }
     });
 
@@ -211,10 +222,14 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     };
   }, []);
 
+  // 문의 상태 추적용 ref
+  const previousInquiryStatusesRef = useRef<Record<string, 'pending' | 'answered'>>({});
+
   // 현재 사용자 정보를 Firestore에서 실시간으로 가져오기
   useEffect(() => {
     let unsubscribeUser: (() => void) | null = null;
     let unsubscribeChatRooms: (() => void) | null = null;
+    let unsubscribeInquiries: (() => void) | null = null;
 
     const unsubscribeAuth = onAuthStateChanged(auth, (firebaseUser: FirebaseUser | null) => {
       // 기존 구독 해제
@@ -226,6 +241,10 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
         unsubscribeChatRooms();
         unsubscribeChatRooms = null;
       }
+      if (unsubscribeInquiries) {
+        unsubscribeInquiries();
+        unsubscribeInquiries = null;
+      }
 
       if (!firebaseUser) {
         // 로그아웃 상태면 기본 사용자로 설정하고 모든 상태 초기화
@@ -233,7 +252,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
         setCurrentUser(DEFAULT_USER);
         setContacts([]);
         setPosts([]);
-        setPoints(1000);
+        setPoints(POINTS.INITIAL * 10); // 로그아웃 시 초기값의 10배로 설정
         setChatRooms([]);
         setMessages({});
         setBlockedUsers({});
@@ -251,10 +270,21 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
         return;
       }
 
-      // 로그인 시 푸시 토큰 등록
-      notificationService.registerForPushNotifications().catch((error) => {
-        console.error('푸시 토큰 등록 실패:', error);
-      });
+      // 로그인 시 푸시 토큰 등록 (약간의 지연 후 실행하여 네이티브 모듈이 준비될 시간 제공)
+      setTimeout(() => {
+        console.log('[로그인] 푸시 토큰 등록 시작');
+        notificationService.registerForPushNotifications()
+          .then((token) => {
+            if (token) {
+              console.log('[로그인] 푸시 토큰 등록 성공:', token.substring(0, 30) + '...');
+            } else {
+              console.warn('[로그인] 푸시 토큰 등록 실패 - 토큰 없음');
+            }
+          })
+          .catch((error) => {
+            console.error('[로그인] 푸시 토큰 등록 실패:', error);
+          });
+      }, 1000); // 1초 후 실행
 
       // Firestore에서 사용자 정보 실시간 구독
       console.log('=== 현재 사용자 실시간 구독 시작 ===');
@@ -328,7 +358,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
                     longitude: finalLocation.longitude,
                     region: finalRegion,
                     isAdmin: userData.isAdmin || false,
-                    points: userPoints !== undefined ? userPoints : 100,
+                    points: userPoints !== undefined ? userPoints : POINTS.DEFAULT,
                   });
                   console.log('기본 지역 정보 Firestore 저장 성공:', finalRegion);
                 } catch (error) {
@@ -337,6 +367,40 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
               })();
             }
             
+            // 운영자(고객센터) 사용자를 contacts에 추가
+            (async () => {
+              try {
+                const adminUser = await firebaseFirestoreService.getUser('customer_service');
+                if (adminUser) {
+                  setContacts((prev) => {
+                    // 이미 존재하는지 확인
+                    if (prev.find(c => c.id === 'customer_service')) {
+                      return prev;
+                    }
+                    return [...prev, adminUser];
+                  });
+                } else {
+                  // 운영자 사용자가 없으면 기본 정보로 추가
+                  const defaultAdminUser: User = {
+                    id: 'customer_service',
+                    name: '운영자',
+                    phoneNumber: '',
+                    location: DEFAULT_LOCATION,
+                    region: DEFAULT_REGION,
+                    isAdmin: true,
+                  };
+                  setContacts((prev) => {
+                    if (prev.find(c => c.id === 'customer_service')) {
+                      return prev;
+                    }
+                    return [...prev, defaultAdminUser];
+                  });
+                }
+              } catch (error) {
+                console.error('운영자 사용자 추가 실패:', error);
+              }
+            })();
+
             // 정지 상태 체크
             if (userData.suspendedUntil) {
               const now = Date.now();
@@ -391,7 +455,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
             
             // 탈퇴 예정 사용자 체크
             if (userData.deletionRequestedAt) {
-              const deletionScheduledAt = userData.deletionScheduledAt || userData.deletionRequestedAt + 30 * 24 * 60 * 60 * 1000;
+              const deletionScheduledAt = userData.deletionScheduledAt || userData.deletionRequestedAt + TIME.ACCOUNT_DELETION_GRACE_PERIOD_MS;
               const daysRemaining = Math.ceil((deletionScheduledAt - Date.now()) / (24 * 60 * 60 * 1000));
               
               if (daysRemaining <= 0) {
@@ -424,8 +488,11 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
               deletionRequestedAt: userData.deletionRequestedAt,
               deletionScheduledAt: userData.deletionScheduledAt,
               lastAttendanceDate: userData.lastAttendanceDate,
+              lastPostRewardDate: userData.lastPostRewardDate,
               suspendedUntil: userData.suspendedUntil,
               suspensionType: userData.suspensionType,
+              likeCount: userData.likeCount,
+              likedBy: userData.likedBy,
             });
             
             // 포인트 정보도 Firestore에서 가져온 값으로 업데이트
@@ -445,22 +512,126 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
         firebaseUser.uid,
         (rooms) => {
           console.log('채팅방 실시간 업데이트:', rooms.length, '개');
-          // 중복 제거: 같은 ID를 가진 채팅방이 여러 개 있으면 첫 번째만 유지
-          const uniqueRooms = rooms.filter((room, index, self) =>
-            index === self.findIndex((r) => r.id === room.id)
-          );
+          // 중복 제거: Set을 사용하여 O(n) 시간복잡도로 최적화
+          const seen = new Set<string>();
+          const uniqueRooms = rooms.filter((room) => {
+            if (seen.has(room.id)) return false;
+            seen.add(room.id);
+            return true;
+          });
           
-          // 새 메시지 알림 처리
+          // 각 채팅방의 메시지 실시간 구독 설정
+          const currentRoomIds = new Set(uniqueRooms.map(room => room.id));
+          
+          // 기존 구독 중 제거된 채팅방의 구독 해제
+          messageUnsubscribesRef.current.forEach((unsubscribe, roomId) => {
+            if (!currentRoomIds.has(roomId)) {
+              unsubscribe();
+              messageUnsubscribesRef.current.delete(roomId);
+            }
+          });
+          
+          // 새 채팅방의 메시지 구독 시작
+          uniqueRooms.forEach((room) => {
+            if (!messageUnsubscribesRef.current.has(room.id)) {
+              // 각 채팅방의 메시지 실시간 구독 (최신 1개만)
+              const unsubscribeMessages = firebaseFirestoreService.subscribeToMessages(
+                room.id,
+                (messages) => {
+                  // 메시지가 업데이트되면 채팅방 목록도 업데이트
+                  if (messages.length > 0) {
+                    const lastMessage = messages[messages.length - 1];
+                    console.log('[메시지 구독] 채팅방 업데이트:', {
+                      roomId: room.id,
+                      lastMessageText: lastMessage.text.substring(0, 30),
+                      timestamp: lastMessage.timestamp,
+                    });
+                    
+                    setChatRooms((prevRooms) => {
+                      const updatedRooms = prevRooms.map((r) => {
+                        if (r.id === room.id) {
+                          // lastMessage가 변경되었는지 확인
+                          const currentLastMessage = r.lastMessage;
+                          const isNewMessage = !currentLastMessage || 
+                            currentLastMessage.timestamp !== lastMessage.timestamp;
+                          
+                          if (isNewMessage) {
+                            return {
+                              ...r,
+                              lastMessage: {
+                                text: lastMessage.text,
+                                senderId: lastMessage.senderId,
+                                receiverId: lastMessage.receiverId,
+                                timestamp: lastMessage.timestamp,
+                              },
+                              unreadCount: lastMessage.receiverId === auth.currentUser?.uid && 
+                                          !lastMessage.read && 
+                                          room.id !== currentChatRoomIdRef.current
+                                ? (r.unreadCount || 0) + 1
+                                : r.unreadCount || 0,
+                            };
+                          }
+                        }
+                        return r;
+                      });
+                      
+                      // 변경사항이 있으면 정렬 (최신 메시지가 있는 방을 위로)
+                      const hasChanges = updatedRooms.some((r, idx) => {
+                        const originalRoom = prevRooms[idx];
+                        return !originalRoom || r.lastMessage?.timestamp !== originalRoom.lastMessage?.timestamp;
+                      });
+                      
+                      if (hasChanges) {
+                        // 최신 메시지 시간 기준으로 정렬
+                        return updatedRooms.sort((a, b) => {
+                          const aTime = a.lastMessage?.timestamp || 0;
+                          const bTime = b.lastMessage?.timestamp || 0;
+                          return bTime - aTime;
+                        });
+                      }
+                      
+                      return updatedRooms;
+                    });
+                    
+                    // 메시지 상태도 업데이트
+                    setMessages((prev) => ({
+                      ...prev,
+                      [room.id]: messages,
+                    }));
+                  }
+                },
+                1 // 마지막 메시지 1개만 필요
+              );
+              messageUnsubscribesRef.current.set(room.id, unsubscribeMessages);
+            }
+          });
+          
+          // 새 메시지 알림 처리 (포그라운드일 때만 로컬 알림 표시)
+          // 백그라운드/종료 상태에서는 sendMessage에서 보낸 푸시 알림만 사용
           uniqueRooms.forEach((room) => {
             if (room.lastMessage && room.lastMessage.receiverId === firebaseUser.uid) {
-              const lastTimestamp = lastMessageTimestampsRef.current[room.id] || 0;
+              const lastTimestamp = lastMessageTimestampsRef.current[room.id];
               const messageTimestamp = room.lastMessage.timestamp;
               
-              // 새 메시지이고, 현재 열려있는 채팅방이 아닐 때만 알림 표시
-              // 앱이 백그라운드이거나 포그라운드이지만 다른 화면에 있을 때 알림 표시
+              // lastMessageTimestampsRef가 초기화되지 않았으면 (앱 재시작 시)
+              // 현재 메시지 타임스탬프로 초기화하여 기존 메시지에 대한 알림 방지
+              if (lastTimestamp === undefined) {
+                lastMessageTimestampsRef.current[room.id] = messageTimestamp;
+                console.log('[알림] 타임스탬프 초기화:', {
+                  roomId: room.id,
+                  timestamp: messageTimestamp,
+                  messageText: room.lastMessage.text.substring(0, 30),
+                });
+                return; // 초기화만 하고 알림은 표시하지 않음
+              }
+              
+              // 새 메시지이고, 읽지 않았고, 현재 열려있는 채팅방이 아닐 때만 알림 표시
+              // 포그라운드일 때만 로컬 알림 표시 (백그라운드는 서버 푸시 사용)
               if (
                 messageTimestamp > lastTimestamp &&
-                room.id !== currentChatRoomIdRef.current
+                !room.lastMessage.read && // 읽지 않은 메시지만
+                room.id !== currentChatRoomIdRef.current &&
+                AppState.currentState === 'active' // 포그라운드일 때만
               ) {
                 // 발신자 정보 찾기
                 const senderId = room.lastMessage.senderId;
@@ -477,27 +648,72 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
                     updatedAt: Date.now(),
                   };
 
-                  // 알림이 켜져있고 메시지 알림이 활성화되어 있을 때만 알림 표시
+                  // 알림이 켜져있고 메시지 알림이 활성화되어 있을 때만 로컬 알림 표시
                   if (settings.enabled && settings.messages) {
-                    // 앱이 백그라운드일 때만 푸시 알림 표시
-                    // 포그라운드일 때는 인앱 알림은 표시하지 않음 (UI에서 이미 표시됨)
-                    if (AppState.currentState !== 'active') {
-                      notificationService.showMessageNotification(
-                        sender.name,
-                        room.lastMessage.text,
-                        room.id
-                      );
-                    }
+                    console.log('[알림] 로컬 알림 표시:', {
+                      roomId: room.id,
+                      senderName: sender.name,
+                      messageText: room.lastMessage.text.substring(0, 30),
+                      timestamp: messageTimestamp,
+                    });
+                    notificationService.showMessageNotification(
+                      sender.name,
+                      room.lastMessage.text,
+                      room.id
+                    );
                   }
                 }
               }
               
-              // 타임스탬프 업데이트
+              // 타임스탬프 업데이트 (읽음 여부와 관계없이 항상 업데이트)
               lastMessageTimestampsRef.current[room.id] = messageTimestamp;
             }
           });
           
           setChatRooms(uniqueRooms);
+          
+          // iOS 홈 화면 아이콘 배지 업데이트
+          const totalUnreadCount = uniqueRooms.reduce((total, room) => {
+            return total + (room.unreadCount || 0);
+          }, 0);
+          notificationService.setBadgeCount(totalUnreadCount);
+        }
+      );
+
+      // 문의 답변 실시간 감시
+      unsubscribeInquiries = firebaseFirestoreService.subscribeToInquiries(
+        firebaseUser.uid,
+        (inquiries) => {
+          // 각 문의의 상태를 확인하여 새로 답변된 문의가 있는지 체크
+          inquiries.forEach((inquiry) => {
+            const previousStatus = previousInquiryStatusesRef.current[inquiry.id];
+            
+            // 이전 상태가 'pending'이고 현재 상태가 'answered'이면 새로 답변된 것
+            if (previousStatus === 'pending' && inquiry.status === 'answered' && inquiry.answer) {
+              // 답변을 채팅방에 메시지로 추가
+              (async () => {
+                try {
+                  await firebaseFirestoreService.addInquiryAnswerToChat(
+                    inquiry.id,
+                    firebaseUser.uid,
+                    inquiry.answer
+                  );
+                  
+                  // 알림 설정 확인
+                  const settings = await firebaseFirestoreService.getNotificationSettings(firebaseUser.uid);
+                  // 알림이 켜져있을 때만 알림 표시
+                  if (!settings || settings.enabled) {
+                    await notificationService.showInquiryAnswerNotification(inquiry.answer);
+                  }
+                } catch (error) {
+                  console.error('문의 답변 처리 실패:', error);
+                }
+              })();
+            }
+            
+            // 현재 상태 저장
+            previousInquiryStatusesRef.current[inquiry.id] = inquiry.status;
+          });
         }
       );
     });
@@ -510,6 +726,14 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       if (unsubscribeChatRooms) {
         unsubscribeChatRooms();
       }
+      if (unsubscribeInquiries) {
+        unsubscribeInquiries();
+      }
+      // 모든 메시지 구독 해제
+      messageUnsubscribesRef.current.forEach((unsubscribe) => {
+        unsubscribe();
+      });
+      messageUnsubscribesRef.current.clear();
     };
   }, []);
 
@@ -532,8 +756,8 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       throw new Error('로그인이 필요합니다.');
     }
 
-    // 운영자 계정과는 채팅할 수 없음
-    if (user.isAdmin) {
+    // 운영자 계정과는 채팅할 수 없음 (단, 고객센터는 예외)
+    if (user.isAdmin && user.id !== 'customer_service') {
       Alert.alert('알림', '운영자 계정과는 채팅할 수 없습니다.');
       throw new Error('운영자 계정과는 채팅할 수 없습니다.');
     }
@@ -652,10 +876,10 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       return;
     }
 
-    // 상대방이 운영자인지 확인 (Firestore에서 직접 확인)
+    // 상대방이 운영자인지 확인 (단, 고객센터는 예외)
     try {
       const partner = await firebaseFirestoreService.getUser(partnerId);
-      if (partner?.isAdmin) {
+      if (partner?.isAdmin && partnerId !== 'customer_service') {
         Alert.alert('알림', '운영자 계정에게는 메시지를 보낼 수 없습니다.');
         return;
       }
@@ -664,7 +888,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       // 조회 실패 시에도 안전을 위해 차단하지 않음 (기존 로직 유지)
       const partner = targetRoom.participantsInfo?.find(p => p.id === partnerId) || 
                       contacts.find(c => c.id === partnerId);
-      if (partner?.isAdmin) {
+      if (partner?.isAdmin && partnerId !== 'customer_service') {
         Alert.alert('알림', '운영자 계정에게는 메시지를 보낼 수 없습니다.');
         return;
       }
@@ -737,7 +961,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       console.log('메시지 DB 저장 완료:', {
         messageId,
         chatRoomId,
-        text: trimmedText.substring(0, 30) + (trimmedText.length > 30 ? '...' : ''),
+        text: trimmedText.substring(0, TEXT.PREVIEW_MAX_LENGTH) + (trimmedText.length > TEXT.PREVIEW_MAX_LENGTH ? '...' : ''),
       });
 
       // 로컬 상태도 업데이트 (즉시 UI 반영, 실시간 구독이 있지만 즉시 반영을 위해)
@@ -831,9 +1055,17 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     return contactsMap.get(partnerId);
   }, [chatRooms, currentUser.id, contactsMap]);
 
-  const markAsRead = useCallback((chatRoomId: string) => {
-    setChatRooms((prev) =>
-      prev.map((room) =>
+  const markAsRead = useCallback(async (chatRoomId: string) => {
+    const firebaseUser = auth.currentUser;
+    if (!firebaseUser) return;
+
+    // Firestore에 읽음 상태 저장 (비동기, 실패해도 로컬 상태는 업데이트)
+    firebaseFirestoreService.markMessagesAsRead(chatRoomId, firebaseUser.uid).catch((error) => {
+      console.error('메시지 읽음 상태 저장 실패:', error);
+    });
+
+    setChatRooms((prev) => {
+      const updatedRooms = prev.map((room) =>
         room.id === chatRoomId && room.unreadCount > 0
           ? {
               ...room,
@@ -841,8 +1073,16 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
               lastMessage: room.lastMessage ? { ...room.lastMessage, read: true } : room.lastMessage,
             }
           : room
-      )
-    );
+      );
+      
+      // iOS 홈 화면 아이콘 배지 업데이트
+      const totalUnreadCount = updatedRooms.reduce((total, room) => {
+        return total + (room.unreadCount || 0);
+      }, 0);
+      notificationService.setBadgeCount(totalUnreadCount);
+      
+      return updatedRooms;
+    });
 
     // 읽지 않은 메시지만 업데이트하여 최적화
     setMessages((prev) => {
@@ -916,7 +1156,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     }
   }, [points, currentUser.name]);
 
-  const createPost = useCallback(async (content: string, images?: string[]) => {
+  const createPost = useCallback(async (content: string, images?: string[]): Promise<{ pointsRewarded: boolean }> => {
     // 콘텐츠 필터링
     const { contentFilterService } = await import('../services/ContentFilterService');
     const filterResult = contentFilterService.filterPost(content.trim());
@@ -988,6 +1228,52 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
 
       console.log('게시글 생성 완료:', postId);
       
+      // 게시글 작성 시 포인트 지급 (50포인트) - 하루에 한 번만
+      // 한국 시간대(KST, UTC+9) 기준으로 오늘 날짜 계산 (자정 00:00 이후 새 날짜)
+      const now = new Date();
+      const kstOffset = 9 * 60; // UTC+9 (분 단위)
+      const kstTime = new Date(now.getTime() + (kstOffset + now.getTimezoneOffset()) * 60000);
+      const today = kstTime.toISOString().split('T')[0]; // YYYY-MM-DD 형식
+      const lastPostRewardDate = currentUser.lastPostRewardDate;
+      let pointsRewarded = false;
+      
+      console.log('📅 포인트 지급 확인:', {
+        today,
+        lastPostRewardDate,
+        willReward: lastPostRewardDate !== today,
+        currentUserLastPostRewardDate: currentUser.lastPostRewardDate,
+        kstHour: kstTime.getHours(),
+        kstMinute: kstTime.getMinutes(),
+      });
+      
+      // 자정(00:00) 이후 날짜가 바뀌면 포인트 지급 가능
+      if (lastPostRewardDate !== today) {
+        // 오늘 첫 게시글이면 포인트 지급
+        console.log('✅ 포인트 지급: 오늘 첫 게시글 (자정 이후)');
+        await addPoints(POINTS.ATTENDANCE_REWARD);
+        pointsRewarded = true;
+        
+        // 마지막 포인트 지급 날짜 업데이트
+        try {
+          await firebaseFirestoreService.updateUserField(
+            firebaseUser.uid,
+            'lastPostRewardDate',
+            today
+          );
+          
+          // 로컬 상태도 업데이트
+          setCurrentUser((prev) => ({
+            ...prev,
+            lastPostRewardDate: today,
+          }));
+          console.log('✅ 마지막 포인트 지급 날짜 업데이트 완료:', today);
+        } catch (error) {
+          console.error('❌ 마지막 포인트 지급 날짜 업데이트 실패:', error);
+        }
+      } else {
+        console.log('⏭️ 포인트 지급 스킵: 오늘 이미 게시글 포인트를 받았습니다.');
+      }
+      
       // Analytics: 게시글 작성
       const { analyticsService } = await import('../services/AnalyticsService');
       analyticsService.logPostCreated(imageUrls.length > 0);
@@ -1002,6 +1288,9 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
           location: currentUser.location,
         });
       }
+      
+      // 포인트 지급 여부 반환
+      return { pointsRewarded };
     } catch (error: any) {
       console.error('게시글 생성 실패:', error);
       console.error('에러 상세:', {
@@ -1028,7 +1317,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       
       throw new Error(errorMessage);
     }
-  }, [currentUser, ensureContact]);
+  }, [currentUser, ensureContact, addPoints]);
 
   const startChatFromPost = useCallback(async (postId: string): Promise<string | null> => {
     const post = posts.find((p) => p.id === postId);
@@ -1037,10 +1326,10 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     // 본인 게시글은 채팅 불가
     if (post.authorId === currentUser.id) return null;
 
-    // 포인트 차감 (50포인트)
-    if (points < 50) return null;
+    // 포인트 차감 (70포인트)
+    if (points < 70) return null;
     
-    const success = await deductPoints(50);
+    const success = await deductPoints(70);
     if (!success) return null;
 
     // 작성자와 채팅 시작 (연락처에서 찾거나 새로 생성)
@@ -1052,8 +1341,8 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       };
     }
 
-    // 운영자 계정과는 채팅할 수 없음
-    if (author.isAdmin) {
+    // 운영자 계정과는 채팅할 수 없음 (단, 고객센터는 예외)
+    if (author.isAdmin && author.id !== 'customer_service') {
       Alert.alert('알림', '운영자 계정과는 채팅할 수 없습니다.');
       return null;
     }
@@ -1066,7 +1355,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     }
   }, [posts, points, currentUser.id, contacts, createOrOpenChat, deductPoints]);
 
-  const updateProfile = useCallback(async (name: string, gender?: Gender, avatar?: string, age?: number, bdsmPreference?: BDSMPreference[], bio?: string) => {
+  const updateProfile = useCallback(async (name: string, gender?: Gender, avatar?: string, age?: number, bdsmPreference?: BDSMPreference[], bio?: string, profileImages?: string[]) => {
     const firebaseUser = auth.currentUser;
     if (!firebaseUser) {
       console.error('로그인이 필요합니다.');
@@ -1074,6 +1363,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     }
 
     let avatarUrl = avatar;
+    let profileImagesUrls: string[] | undefined = undefined;
     
     // 아바타 이미지가 새로 업로드된 경우 Firebase Storage에 업로드
     if (avatar && !avatar.startsWith('http')) {
@@ -1085,6 +1375,30 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       }
     }
 
+    // profileImages가 전달된 경우 업로드
+    if (profileImages && profileImages.length > 0) {
+      try {
+        // 새로 업로드할 이미지들만 필터링 (이미 URL인 것은 제외)
+        const newImages = profileImages.filter(uri => !uri.startsWith('http'));
+        const existingUrls = profileImages.filter(uri => uri.startsWith('http'));
+        
+        if (newImages.length > 0) {
+          const uploadedUrls = await firebaseStorageService.uploadMultipleProfileImages(firebaseUser.uid, newImages);
+          profileImagesUrls = [...existingUrls, ...uploadedUrls];
+        } else {
+          profileImagesUrls = existingUrls;
+        }
+        
+        // 첫 번째 이미지를 avatar로도 설정 (호환성 유지)
+        if (profileImagesUrls.length > 0 && !avatarUrl) {
+          avatarUrl = profileImagesUrls[0];
+        }
+      } catch (error) {
+        console.error('프로필 이미지 업로드 실패:', error);
+        throw error;
+      }
+    }
+
     // 먼저 Firestore에 저장
     try {
       const normalizedPhone = firebaseUser.phoneNumber?.replace(/[-\s]/g, '') || '';
@@ -1093,6 +1407,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
         phoneNumber: string;
         name: string;
         avatar?: string;
+        profileImages?: string[];
         gender?: Gender;
         age?: number;
         latitude?: number;
@@ -1130,6 +1445,18 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       if (finalBio !== undefined) {
         userData.bio = finalBio;
       }
+
+      // profileImages가 전달된 경우 포함
+      if (profileImagesUrls !== undefined) {
+        userData.profileImages = profileImagesUrls;
+        // profileImages가 있으면 첫 번째를 avatar로도 설정
+        if (profileImagesUrls.length > 0) {
+          userData.avatar = profileImagesUrls[0];
+        }
+      } else if (profileImages === undefined && currentUser.profileImages) {
+        // profileImages가 전달되지 않았지만 기존에 있으면 유지
+        userData.profileImages = currentUser.profileImages;
+      }
       
       await firebaseFirestoreService.createOrUpdateUser(userData);
       console.log('사용자 정보 동기화 성공');
@@ -1151,7 +1478,8 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       ...prev,
       name: name.trim(),
       gender,
-      avatar: avatarUrl,
+      avatar: avatarUrl || (profileImagesUrls && profileImagesUrls.length > 0 ? profileImagesUrls[0] : prev.avatar),
+      profileImages: profileImagesUrls !== undefined ? profileImagesUrls : prev.profileImages,
       age: age !== undefined ? age : prev.age,
       bdsmPreference: bdsmPreference !== undefined ? bdsmPreference : prev.bdsmPreference,
       bio: bio !== undefined ? bio : prev.bio,

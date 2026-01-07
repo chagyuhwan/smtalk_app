@@ -267,12 +267,8 @@ export default function PhoneAuthScreen({ navigation }: Props) {
       return;
     }
 
-    if (!bdsmPreference || bdsmPreference.length === 0) {
-      Alert.alert('알림', 'BDSM 성향을 최소 1개 이상 선택해주세요.');
-      return;
-    }
-
-    if (bdsmPreference.length > 3) {
+    // BDSM 성향은 선택사항이지만, 선택한 경우 최대 3개까지 가능
+    if (bdsmPreference && bdsmPreference.length > 3) {
       Alert.alert('알림', 'BDSM 성향은 최대 3개까지 선택할 수 있습니다.');
       return;
     }
@@ -295,7 +291,46 @@ export default function PhoneAuthScreen({ navigation }: Props) {
 
     setLoading(true);
     try {
-      const normalizedPhone = phoneNumber.replace(/[-\s]/g, '');
+      // Firebase Auth의 phoneNumber를 우선 사용, 없으면 state의 phoneNumber 사용
+      let phoneToUse = currentUser.phoneNumber || phoneNumber;
+      
+      // 둘 다 없거나 비어있는 경우 에러
+      if (!phoneToUse || phoneToUse.trim() === '') {
+        Alert.alert('오류', '전화번호 정보를 찾을 수 없습니다. 다시 인증해주세요.');
+        setLoading(false);
+        return;
+      }
+      
+      // 전화번호 정규화: 하이픈, 공백 제거
+      let normalizedPhone = phoneToUse.replace(/[-\s]/g, '');
+      
+      // 국가 코드가 포함된 경우 제거 (+82 또는 82로 시작)
+      if (normalizedPhone.startsWith('+82')) {
+        normalizedPhone = '0' + normalizedPhone.substring(3);
+      } else if (normalizedPhone.startsWith('82') && normalizedPhone.length > 10) {
+        normalizedPhone = '0' + normalizedPhone.substring(2);
+      }
+      
+      // 정규화된 전화번호가 유효한지 확인 (11자리 숫자, 010으로 시작)
+      if (normalizedPhone.length !== 11 || !normalizedPhone.startsWith('010')) {
+        console.error('전화번호 검증 실패:', {
+          original: phoneToUse,
+          normalized: normalizedPhone,
+          length: normalizedPhone.length,
+          startsWith010: normalizedPhone.startsWith('010')
+        });
+        Alert.alert('오류', '유효하지 않은 전화번호입니다. 다시 인증해주세요.');
+        setLoading(false);
+        return;
+      }
+      
+      console.log('회원가입 - 전화번호 확인:', {
+        currentUserPhone: currentUser.phoneNumber,
+        statePhone: phoneNumber,
+        phoneToUse: phoneToUse,
+        normalizedPhone: normalizedPhone
+      });
+      
       const userId = currentUser.uid;
 
       // 지역에 해당하는 좌표 가져오기
@@ -513,9 +548,6 @@ export default function PhoneAuthScreen({ navigation }: Props) {
                   ) : (
                     <Text style={styles.avatarText}>{name.charAt(0).toUpperCase() || '?'}</Text>
                   )}
-                  <View style={styles.cameraIcon}>
-                    <Text style={styles.cameraIconText}>📷</Text>
-                  </View>
                 </View>
               </TouchableOpacity>
               <View style={styles.avatarActions}>
@@ -532,7 +564,7 @@ export default function PhoneAuthScreen({ navigation }: Props) {
               </View>
             </View>
 
-            <Text style={styles.label}>닉네임</Text>
+            <Text style={styles.label}>닉네임 <Text style={styles.requiredMark}>*</Text></Text>
             <TextInput
               ref={nameInputRef}
               style={styles.input}
@@ -543,7 +575,7 @@ export default function PhoneAuthScreen({ navigation }: Props) {
               autoFocus
             />
 
-            <Text style={styles.label}>성별</Text>
+            <Text style={styles.label}>성별 <Text style={styles.requiredMark}>*</Text></Text>
             <View style={styles.genderContainer}>
               <TouchableOpacity
                 style={[
@@ -579,7 +611,7 @@ export default function PhoneAuthScreen({ navigation }: Props) {
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.label}>나이</Text>
+            <Text style={styles.label}>나이 <Text style={styles.requiredMark}>*</Text></Text>
             <TextInput
               style={styles.input}
               placeholder="나이를 입력하세요"
@@ -589,7 +621,7 @@ export default function PhoneAuthScreen({ navigation }: Props) {
               maxLength={3}
             />
 
-            <Text style={styles.label}>지역</Text>
+            <Text style={styles.label}>지역 <Text style={styles.requiredMark}>*</Text></Text>
             <TouchableOpacity
               style={styles.dropdownButton}
               onPress={() => setShowRegionDropdown(true)}
@@ -618,7 +650,7 @@ export default function PhoneAuthScreen({ navigation }: Props) {
               </Text>
             )}
 
-            <Text style={styles.label}>자기소개</Text>
+            <Text style={styles.label}>자기소개 <Text style={styles.requiredMark}>*</Text></Text>
             <TextInput
               style={[styles.input, styles.bioInput]}
               placeholder="자기소개를 입력하세요"
@@ -674,6 +706,11 @@ export default function PhoneAuthScreen({ navigation }: Props) {
                 </View>
               </TouchableOpacity>
             </View>
+
+            {/* 필수 입력 안내 문구 */}
+            <Text style={styles.requiredInfoText}>
+              <Text style={styles.requiredMark}>*</Text>로 표시된 항목은 필수이며, 표시가 없는 항목은 선택 입력입니다.
+            </Text>
 
             <TouchableOpacity
               style={[styles.button, (loading || !agreedToTerms || !agreedToPrivacy) && styles.buttonDisabled]}
@@ -809,10 +846,7 @@ export default function PhoneAuthScreen({ navigation }: Props) {
               <TouchableOpacity
                 style={styles.modalConfirmButton}
                 onPress={() => {
-                  if (bdsmPreference.length === 0) {
-                    Alert.alert('알림', '최소 1개 이상 선택해주세요.');
-                    return;
-                  }
+                  // BDSM 성향은 선택사항이므로 바로 닫기
                   setShowBdsmDropdown(false);
                 }}
               >
@@ -1212,6 +1246,17 @@ const styles = StyleSheet.create({
     color: '#1F2937',
     marginLeft: 4,
     textDecorationLine: 'underline',
+  },
+  requiredMark: {
+    color: '#F04438',
+    fontWeight: '600',
+  },
+  requiredInfoText: {
+    fontSize: 12,
+    color: '#667085',
+    marginTop: 8,
+    marginBottom: 16,
+    textAlign: 'center',
   },
 });
 

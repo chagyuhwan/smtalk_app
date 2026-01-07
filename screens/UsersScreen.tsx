@@ -9,6 +9,7 @@ import {
   Image,
   Alert,
   ScrollView,
+  RefreshControl,
 } from 'react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -87,34 +88,14 @@ export default function UsersScreen() {
   const [genderMetrics, setGenderMetrics] = useState({ x: 0, width: MIN_DROPDOWN_WIDTH });
   const [bdsmMetrics, setBdsmMetrics] = useState({ x: 0, width: MIN_DROPDOWN_WIDTH });
   const [ageMetrics, setAgeMetrics] = useState({ x: 0, width: MIN_DROPDOWN_WIDTH });
-
-  // 디버깅: contacts와 currentUser 확인
-  console.log('=== UsersScreen 디버깅 ===');
-  console.log('contacts 배열:', contacts);
-  console.log('contacts 개수:', contacts.length, '명');
-  console.log('currentUser:', currentUser);
-  console.log('currentUser.id:', currentUser.id);
-  console.log('currentUser.name:', currentUser.name);
+  const [refreshing, setRefreshing] = useState(false);
 
   // 현재 사용자 제외한 연락처 목록 (차단된 사용자도 제외)
   const filteredContacts = useMemo(() => {
-    console.log('=== 필터링 시작 ===');
-    console.log('필터링 전 contacts:', contacts.length, '명');
-    
     let filtered = contacts.filter((contact) => {
       const isNotCurrentUser = !currentUser.id || contact.id !== currentUser.id;
       const isNotBlocked = !isBlocked(contact.id);
-      const isNotAdmin = !contact.isAdmin; // 운영자 계정 제외
-      
-      if (!isNotCurrentUser) {
-        console.log('현재 사용자로 필터링됨:', contact.id, contact.name);
-      }
-      if (!isNotBlocked) {
-        console.log('차단된 사용자로 필터링됨:', contact.id, contact.name);
-      }
-      if (!isNotAdmin) {
-        console.log('운영자 계정으로 필터링됨:', contact.id, contact.name);
-      }
+      const isNotAdmin = !contact.isAdmin;
       
       return isNotCurrentUser && isNotBlocked && isNotAdmin;
     });
@@ -156,17 +137,16 @@ export default function UsersScreen() {
       });
     }
     
-    console.log('필터링 후 contacts:', filtered.length, '명');
-    console.log('필터링된 사용자 목록:', filtered.map(u => ({ id: u.id, name: u.name })));
-    console.log('=== 필터링 완료 ===');
-    
     return filtered;
   }, [contacts, currentUser.id, isBlocked, selectedRegion, genderFilter, bdsmFilter, ageFilter]);
 
-  // 이름순으로 정렬
+  // 최근 접속순으로 정렬 (lastSeen이 있으면 그것을, 없으면 0으로 정렬)
   const sortedContacts = useMemo(() => {
     return [...filteredContacts].sort((a, b) => {
-      return a.name.localeCompare(b.name);
+      const aLastSeen = a.lastSeen || 0;
+      const bLastSeen = b.lastSeen || 0;
+      // 최근 접속한 사용자가 먼저 오도록 내림차순 정렬
+      return bLastSeen - aLastSeen;
     });
   }, [filteredContacts]);
 
@@ -240,6 +220,14 @@ export default function UsersScreen() {
   }, []);
 
   const isDropdownOpen = showRegionDropdown || showGenderDropdown || showBdsmDropdown || showAgeDropdown;
+
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    // 실시간 구독이 자동으로 업데이트되므로 짧은 딜레이 후 새로고침 상태 해제
+    setTimeout(() => {
+      setRefreshing(false);
+    }, 1000);
+  }, []);
 
   const handleReportUser = useCallback((user: User) => {
     const reportReasons: { label: string; value: ReportReason }[] = [
@@ -345,12 +333,9 @@ export default function UsersScreen() {
         <View style={styles.userInfo}>
           <View style={styles.nameRow}>
             <Text style={styles.userName}>{item.name}</Text>
-            {item.age && (
-              <Text style={styles.age}>{item.age}세</Text>
-            )}
-            {item.gender && (
-              <Text style={styles.gender}>
-                {item.gender === 'male' ? '남' : '여'}
+            {item.age && item.gender && (
+              <Text style={styles.age}>
+                {item.age}{item.gender === 'male' ? '남' : '여'}
               </Text>
             )}
           </View>
@@ -373,7 +358,6 @@ export default function UsersScreen() {
           >
             <Text style={styles.menuButtonText}>⋯</Text>
           </TouchableOpacity>
-          <Text style={styles.arrow}>›</Text>
         </View>
       </TouchableOpacity>
     );
@@ -383,7 +367,7 @@ export default function UsersScreen() {
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>사용자</Text>
-        <View style={styles.headerSpacer} />
+        <Text style={styles.subtitle}>새로운 인연을 만나보세요</Text>
       </View>
 
       {/* 드롭다운 오버레이 */}
@@ -681,6 +665,14 @@ export default function UsersScreen() {
         renderItem={renderUser}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor="#1F2937"
+            colors={['#1F2937']}
+          />
+        }
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
             <Text style={styles.emptyText}>사용자가 없습니다</Text>
@@ -708,9 +700,7 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: '700',
     color: '#fff',
-  },
-  headerSpacer: {
-    height: 20,
+    marginBottom: 6,
   },
   subtitle: {
     fontSize: 14,
@@ -837,7 +827,7 @@ const styles = StyleSheet.create({
     marginRight: 6,
   },
   age: {
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '500',
     color: '#666',
     marginRight: 6,

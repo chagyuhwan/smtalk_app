@@ -1,0 +1,49 @@
+{
+  "project_info": {
+    "project_number": "820172370623",
+    "firebase_url": "https://kc-chat-3e4be-default-rtdb.firebaseio.com",
+    "project_id": "kc-chat-3e4be",
+    "storage_bucket": "kc-chat-3e4be.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:820172370623:android:0223c8cbe8202f0a9e4c0a",
+        "android_client_info": {
+          "package_name": "com.kanc.randomchat"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAcsPA6Qohbq7-LoPpEOZ9xjyMQTzzgOD0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,8 @@ import {
   Alert,
   Modal,
   TouchableWithoutFeedback,
+  FlatList,
+  Dimensions,
 } from 'react-native';
 import { useRoute, useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -18,6 +20,7 @@ import { User, BDSMPreference } from '../types';
 import { firebaseFirestoreService } from '../services/FirebaseFirestoreService';
 import { auth } from '../config/firebase';
 import { performanceMonitor } from '../utils/PerformanceMonitor';
+import { POINTS } from '../constants';
 
 const BDSM_LABELS: Record<BDSMPreference, string> = {
   vanilla: '바닐라',
@@ -58,8 +61,6 @@ type RouteProp = {
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
-const CHAT_COST = 50;
-
 export default function UserProfileScreen() {
   const route = useRoute<RouteProp>();
   const navigation = useNavigation<NavigationProp>();
@@ -80,6 +81,8 @@ export default function UserProfileScreen() {
   const [isLikedState, setIsLikedState] = useState<boolean>(false);
   const [likeCount, setLikeCount] = useState<number>(initialUser.likeCount || 0);
   const [showMenu, setShowMenu] = useState<boolean>(false);
+  const [currentImageIndex, setCurrentImageIndex] = useState<number>(0);
+  const flatListRef = useRef<FlatList>(null);
 
   const isMe = user.id === currentUser.id;
   const isBlockedUser = isBlocked(user.id);
@@ -128,20 +131,32 @@ export default function UserProfileScreen() {
   };
 
   const handleChat = async () => {
-    if (points < CHAT_COST) {
-      Alert.alert('포인트 부족', `채팅을 시작하려면 ${CHAT_COST}포인트가 필요합니다.`);
+    if (points < POINTS.CHAT_COST) {
+      Alert.alert(
+        '포인트 부족',
+        `채팅을 시작하려면 ${POINTS.CHAT_COST}포인트가 필요합니다.`,
+        [
+          {
+            text: '상점 가기',
+            onPress: () => {
+              navigation.navigate('Charge');
+            },
+          },
+          { text: '취소', style: 'cancel' },
+        ]
+      );
       return;
     }
 
     Alert.alert(
       '채팅 시작',
-      `${user.name}님과의 채팅을 시작하시겠습니까?\n\n${CHAT_COST}포인트가 차감됩니다.`,
+      `${user.name}님과의 채팅을 시작하시겠습니까?\n\n${POINTS.CHAT_COST}포인트가 차감됩니다.`,
       [
         { text: '취소', style: 'cancel' },
         {
           text: '확인',
           onPress: async () => {
-            const success = await deductPoints(CHAT_COST);
+            const success = await deductPoints(POINTS.CHAT_COST);
             if (!success) {
               Alert.alert('오류', '포인트가 부족하거나 차감에 실패했습니다.');
               return;
@@ -222,6 +237,30 @@ export default function UserProfileScreen() {
 
   const avatarColor = getAvatarColor(user.id, user.gender, !!user.avatar);
   const initial = getInitial(user.name);
+  
+  // 프로필 이미지 배열 생성 (profileImages가 있으면 사용, 없으면 avatar 사용)
+  const profileImagesArray = user.profileImages && user.profileImages.length > 0 
+    ? user.profileImages 
+    : (user.avatar ? [user.avatar] : []);
+  
+  const screenWidth = Dimensions.get('window').width;
+
+  // 마지막 로그인 시간 포맷팅
+  const formatLastSeen = (lastSeen?: number): string => {
+    if (!lastSeen) return '';
+    
+    const diff = Date.now() - lastSeen;
+    const minute = 60 * 1000;
+    const hour = 60 * minute;
+    const day = 24 * hour;
+
+    if (diff < minute) return '방금 전 로그인';
+    if (diff < hour) return `${Math.floor(diff / minute)}분 전 로그인`;
+    if (diff < day) return `${Math.floor(diff / hour)}시간 전 로그인`;
+    
+    const date = new Date(lastSeen);
+    return `${date.getMonth() + 1}/${date.getDate()} 로그인`;
+  };
 
   return (
     <View style={styles.container}>
@@ -247,13 +286,49 @@ export default function UserProfileScreen() {
 
       <ScrollView style={styles.content} contentContainerStyle={styles.contentContainer}>
         <View style={styles.profileImageSection}>
-          <View style={[styles.avatarContainer, { backgroundColor: avatarColor }]}>
-            {user.avatar ? (
-              <Image source={{ uri: user.avatar }} style={styles.avatar} />
-            ) : (
+          {profileImagesArray.length > 0 ? (
+            <>
+              <FlatList
+                ref={flatListRef}
+                data={profileImagesArray}
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                keyExtractor={(item, index) => `profile-${index}`}
+                onMomentumScrollEnd={(event) => {
+                  const index = Math.round(event.nativeEvent.contentOffset.x / screenWidth);
+                  setCurrentImageIndex(index);
+                }}
+                renderItem={({ item }) => (
+                  <View style={[styles.avatarContainer, { backgroundColor: avatarColor, width: screenWidth }]}>
+                    <Image source={{ uri: item }} style={styles.avatar} />
+                  </View>
+                )}
+                getItemLayout={(data, index) => ({
+                  length: screenWidth,
+                  offset: screenWidth * index,
+                  index,
+                })}
+              />
+              {profileImagesArray.length > 1 && (
+                <View style={styles.imageIndicatorContainer}>
+                  {profileImagesArray.map((_, index) => (
+                    <View
+                      key={index}
+                      style={[
+                        styles.imageIndicator,
+                        index === currentImageIndex && styles.imageIndicatorActive,
+                      ]}
+                    />
+                  ))}
+                </View>
+              )}
+            </>
+          ) : (
+            <View style={[styles.avatarContainer, { backgroundColor: avatarColor }]}>
               <Text style={styles.avatarText}>{initial}</Text>
-            )}
-          </View>
+            </View>
+          )}
         </View>
         <View style={styles.profileInfoSection}>
           <View style={styles.infoRow}>
@@ -287,6 +362,9 @@ export default function UserProfileScreen() {
               </TouchableOpacity>
             )}
           </View>
+          {user.lastSeen && (
+            <Text style={styles.lastSeenText}>{formatLastSeen(user.lastSeen)}</Text>
+          )}
         </View>
 
         {user.bio && (
@@ -488,19 +566,20 @@ const styles = StyleSheet.create({
   },
   profileImageSection: {
     width: '100%',
-    aspectRatio: 1,
+    height: 350,
     backgroundColor: '#fff',
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 0,
+    position: 'relative',
   },
   profileInfoSection: {
     backgroundColor: '#fff',
     alignItems: 'center',
-    paddingTop: 20,
-    paddingBottom: 24,
+    paddingTop: 16,
+    paddingBottom: 16,
     paddingHorizontal: 20,
-    marginBottom: 16,
+    marginBottom: 12,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     marginTop: -20,
@@ -518,11 +597,11 @@ const styles = StyleSheet.create({
   },
   avatarText: {
     color: '#fff',
-    fontSize: 120,
+    fontSize: 130,
     fontWeight: '700',
   },
   name: {
-    fontSize: 24,
+    fontSize: 20,
     fontWeight: '700',
     color: '#111',
   },
@@ -541,6 +620,13 @@ const styles = StyleSheet.create({
   infoText: {
     fontSize: 16,
     color: '#667085',
+  },
+  lastSeenText: {
+    fontSize: 13,
+    color: '#888',
+    marginTop: 8,
+    textAlign: 'left',
+    width: '100%',
   },
   likeButtonInline: {
     flexDirection: 'row',
@@ -604,19 +690,19 @@ const styles = StyleSheet.create({
   section: {
     backgroundColor: '#fff',
     borderRadius: 20,
-    padding: 20,
-    marginBottom: 16,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#111',
+    padding: 16,
     marginBottom: 12,
   },
-  bioText: {
+  sectionTitle: {
     fontSize: 15,
+    fontWeight: '600',
+    color: '#111',
+    marginBottom: 10,
+  },
+  bioText: {
+    fontSize: 14,
     color: '#333',
-    lineHeight: 22,
+    lineHeight: 20,
   },
   bdsmContainer: {
     flexDirection: 'row',
@@ -636,7 +722,8 @@ const styles = StyleSheet.create({
   },
   buttonSection: {
     gap: 10,
-    marginTop: -8,
+    marginTop: 8,
+    marginBottom: 20,
     paddingHorizontal: 20,
   },
   chatButton: {
@@ -684,6 +771,28 @@ const styles = StyleSheet.create({
     color: '#DC2626',
     fontSize: 16,
     fontWeight: '600',
+  },
+  imageIndicatorContainer: {
+    position: 'absolute',
+    bottom: 12,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 6,
+  },
+  imageIndicator: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: 'rgba(255, 255, 255, 0.5)',
+  },
+  imageIndicatorActive: {
+    backgroundColor: '#fff',
+    width: 8,
+    height: 8,
+    borderRadius: 4,
   },
 });
 

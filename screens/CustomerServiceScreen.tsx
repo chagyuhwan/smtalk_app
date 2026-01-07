@@ -38,7 +38,7 @@ const FAQ_DATA: FAQItem[] = [
   {
     id: '3',
     question: '채팅을 시작하려면 포인트가 필요한가요?',
-    answer: '네, 사용자와 채팅을 시작하거나 게시글에서 채팅을 시작할 때 50포인트가 차감됩니다. 포인트가 부족하면 채팅을 시작할 수 없습니다.',
+    answer: '네, 사용자와 채팅을 시작하거나 게시글에서 채팅을 시작할 때 70포인트가 차감됩니다. 포인트가 부족하면 채팅을 시작할 수 없습니다.',
   },
   {
     id: '4',
@@ -238,7 +238,7 @@ const styles = StyleSheet.create({
     paddingTop: 50,
     paddingHorizontal: 20,
     paddingBottom: 16,
-    backgroundColor: '#1F2937',
+    backgroundColor: '#fff',
   },
   backButton: {
     width: 40,
@@ -248,13 +248,13 @@ const styles = StyleSheet.create({
   },
   backButtonText: {
     fontSize: 28,
-    color: '#fff',
+    color: '#111',
     fontWeight: '300',
   },
   headerTitle: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#fff',
+    color: '#111',
   },
   content: {
     flex: 1,

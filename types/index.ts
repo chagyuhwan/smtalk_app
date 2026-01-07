@@ -55,21 +55,24 @@ export interface Location {
 export interface User {
   id: string;
   name: string;
-  avatar?: string;
+  avatar?: string; // 첫 번째 프로필 사진 (호환성 유지)
+  profileImages?: string[]; // 프로필 사진 배열 (최대 5장)
   gender?: Gender;
   age?: number;
   location?: Location;
   region?: Region; // 지역 정보
   isAdmin?: boolean; // 관리자 여부
-  bdsmPreference?: BDSMPreference[]; // BDSM 성향 (최대 3개, 최소 1개 필수)
+  bdsmPreference?: BDSMPreference[]; // BDSM 성향 (선택사항, 최대 3개)
   bio?: string; // 자기소개
   deletionRequestedAt?: number; // 탈퇴 요청일 (타임스탬프)
   deletionScheduledAt?: number; // 탈퇴 예정일 (타임스탬프, 요청일 + 30일)
   lastAttendanceDate?: string; // 마지막 출석체크 날짜 (YYYY-MM-DD 형식)
+  lastPostRewardDate?: string; // 마지막 게시글 포인트 지급 날짜 (YYYY-MM-DD 형식)
   suspendedUntil?: number; // 정지 해제일 (타임스탬프)
   suspensionType?: '1day' | '7days' | 'permanent'; // 정지 타입
   likeCount?: number; // 좋아요 수
   likedBy?: Record<string, number>; // 좋아요를 누른 사용자 목록 (userId -> timestamp)
+  lastSeen?: number; // 마지막 접속 시간 (타임스탬프)
 }
 
 export interface Message {
@@ -79,6 +82,7 @@ export interface Message {
   receiverId: string;
   timestamp: number;
   read: boolean;
+  images?: string[];
 }
 
 export interface ChatRoom {

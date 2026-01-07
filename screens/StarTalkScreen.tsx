@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -12,18 +12,25 @@ import {
   Modal,
   ScrollView,
   Platform,
+  RefreshControl,
+  Animated,
+  PanResponder,
+  KeyboardAvoidingView,
+  ActivityIndicator,
 } from 'react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import * as ImagePicker from 'expo-image-picker';
 import * as MediaLibrary from 'expo-media-library';
 import * as ImageManipulator from 'expo-image-manipulator';
-import * as FileSystem from 'expo-file-system';
 import { useChat } from '../context/ChatContext';
 import { Post, BDSMPreference, Region } from '../types';
 import { RootStackParamList } from '../navigation/types';
 import { REGION_NAMES, REGION_LIST } from '../utils/regions';
 import { performanceMonitor } from '../utils/PerformanceMonitor';
+import { firebaseFirestoreService } from '../services/FirebaseFirestoreService';
+import { formatRelativeTime } from '../utils/time';
+import { getAvatarColor } from '../utils/avatar';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -58,15 +65,6 @@ const BDSM_LABELS: Record<BDSMPreference, string> = {
 
 const CHAT_COST = 50;
 
-const getAvatarColor = (gender?: string, hasAvatar?: boolean) => {
-  // 프로필 사진이 없을 때 성별에 따라 색상 설정
-  if (!hasAvatar && gender) {
-    return gender === 'female' ? '#F3AAC2' : '#8FB5DF'; // 여자는 핑크, 남자는 연한 파란색
-  }
-  // 프로필 사진이 있거나 성별 정보가 없을 때는 기본 파란색
-  return '#1F2937';
-};
-
 type PostFilter = 'region' | 'my';
 type GenderFilter = 'all' | 'male' | 'female';
 type BDSMFilter = 'all' | BDSMPreference;
@@ -94,6 +92,14 @@ export default function StarTalkScreen() {
   const [genderFilter, setGenderFilter] = useState<GenderFilter>('all');
   const [bdsmFilter, setBdsmFilter] = useState<BDSMFilter>('all');
   const [ageFilter, setAgeFilter] = useState<AgeFilter>('all');
+  const [isSwiping, setIsSwiping] = useState(false); // 스와이프 중인지 추적
+  const [isPosting, setIsPosting] = useState(false); // 게시글 등록 중인지 추적
+  const [isPickingImage, setIsPickingImage] = useState(false); // 이미지 선택 중인지 추적
+  
+  // 모달이 열릴 때 또는 닫힐 때 이미지 선택 상태 초기화
+  useEffect(() => {
+    setIsPickingImage(false);
+  }, [isWriting]);
   const [showPostDropdown, setShowPostDropdown] = useState(false);
   const [showRegionDropdown, setShowRegionDropdown] = useState(false);
   const [showGenderDropdown, setShowGenderDropdown] = useState(false);
@@ -110,45 +116,45 @@ export default function StarTalkScreen() {
   const [bdsmMetrics, setBdsmMetrics] = useState({ x: 0, width: MIN_DROPDOWN_WIDTH });
   const [ageMetrics, setAgeMetrics] = useState({ x: 0, width: MIN_DROPDOWN_WIDTH });
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // contacts를 Map으로 변환하여 O(1) 조회 최적화
+  const contactsMap = useMemo(() => {
+    const map = new Map<string, User>();
+    contacts.forEach((contact) => map.set(contact.id, contact));
+    return map;
+  }, [contacts]);
 
   const sortedPosts = useMemo(() => {
-    let filtered = [...posts];
-
-    // 차단된 사용자의 게시글 제거
-    filtered = filtered.filter((post) => !isBlocked(post.authorId));
+    let filtered = posts.filter((post) => !isBlocked(post.authorId));
 
     // 성별 필터 적용
     if (genderFilter !== 'all') {
       filtered = filtered.filter((post) => {
-        if (post.authorId === currentUser.id) {
-          return currentUser.gender ? currentUser.gender === genderFilter : false;
-        }
-        const author = contacts.find((c) => c.id === post.authorId);
-        return author?.gender ? author.gender === genderFilter : false;
+        const author = post.authorId === currentUser.id 
+          ? currentUser 
+          : contactsMap.get(post.authorId);
+        return author?.gender === genderFilter;
       });
     }
 
     // BDSM 필터 적용
     if (bdsmFilter !== 'all') {
       filtered = filtered.filter((post) => {
-        if (post.authorId === currentUser.id) {
-          return currentUser.bdsmPreference ? currentUser.bdsmPreference.includes(bdsmFilter) : false;
-        }
-        const author = contacts.find((c) => c.id === post.authorId);
-        return author?.bdsmPreference ? author.bdsmPreference.includes(bdsmFilter) : false;
+        const author = post.authorId === currentUser.id 
+          ? currentUser 
+          : contactsMap.get(post.authorId);
+        return author?.bdsmPreference?.includes(bdsmFilter) ?? false;
       });
     }
 
     // 나이 필터 적용
     if (ageFilter !== 'all' && ageFilter) {
       filtered = filtered.filter((post) => {
-        let authorAge: number | undefined;
-        if (post.authorId === currentUser.id) {
-          authorAge = currentUser.age;
-        } else {
-          const author = contacts.find((c) => c.id === post.authorId);
-          authorAge = author?.age;
-        }
+        const author = post.authorId === currentUser.id 
+          ? currentUser 
+          : contactsMap.get(post.authorId);
+        const authorAge = author?.age;
         
         if (!authorAge) return false;
         
@@ -172,10 +178,9 @@ export default function StarTalkScreen() {
       // 지역별 필터링
       if (selectedRegion !== 'all') {
         filtered = filtered.filter((post) => {
-          if (post.authorId === currentUser.id) {
-            return currentUser.region === selectedRegion;
-          }
-          const author = contacts.find((c) => c.id === post.authorId);
+          const author = post.authorId === currentUser.id 
+            ? currentUser 
+            : contactsMap.get(post.authorId);
           return author?.region === selectedRegion;
         });
       }
@@ -185,7 +190,7 @@ export default function StarTalkScreen() {
 
     filtered.sort((a, b) => b.timestamp - a.timestamp);
     return filtered;
-  }, [posts, postFilter, selectedRegion, genderFilter, bdsmFilter, ageFilter, currentUser, contacts, isBlocked]);
+  }, [posts, postFilter, selectedRegion, genderFilter, bdsmFilter, ageFilter, currentUser, contactsMap, isBlocked]);
 
   const postFilterLabel = useMemo(() => {
     switch (postFilter) {
@@ -275,78 +280,60 @@ export default function StarTalkScreen() {
   const isDropdownOpen = showPostDropdown || showRegionDropdown || showGenderDropdown || showBdsmDropdown || showAgeDropdown;
 
   const formatTime = useCallback((timestamp: number): string => {
-    const diff = Date.now() - timestamp;
-    const minute = 60 * 1000;
-    const hour = 60 * minute;
-    const day = 24 * hour;
-
-    if (diff < minute) return '방금 전';
-    if (diff < hour) return `${Math.floor(diff / minute)}분 전`;
-    if (diff < day) return `${Math.floor(diff / hour)}시간 전`;
-
-    const date = new Date(timestamp);
-    return `${date.getMonth() + 1}/${date.getDate()}`;
+    return formatRelativeTime(timestamp);
   }, []);
 
   const handlePost = useCallback(async () => {
-    console.log('🔵 handlePost 호출됨');
-    console.log('postContent:', postContent);
-    console.log('postContent.trim():', postContent.trim());
-    console.log('selectedImages:', selectedImages);
+    // 중복 클릭 방지
+    if (isPosting) return;
     
     if (!postContent.trim()) {
-      console.log('❌ 내용이 비어있음');
       Alert.alert('알림', '내용을 입력해주세요.');
       return;
     }
 
-    // 이미지가 있으면 배열로, 없으면 undefined로 전달
+    setIsPosting(true);
     const imagesToPost = selectedImages.length > 0 ? [...selectedImages] : undefined;
     
-    // 디버깅: 이미지 URI 확인
-    console.log('=== 게시글 작성 시작 ===');
-    console.log('선택된 이미지 개수:', selectedImages.length);
-    console.log('selectedImages 상태:', selectedImages);
-    console.log('전달할 imagesToPost:', imagesToPost);
-    console.log('createPost 함수:', typeof createPost);
-    
     try {
-      console.log('🟢 createPost 호출 전');
-      await createPost(postContent.trim(), imagesToPost);
-      console.log('🟢 createPost 호출 완료');
+      const result = await createPost(postContent.trim(), imagesToPost);
       setPostContent('');
       setSelectedImages([]);
+      setIsPickingImage(false);
       setIsWriting(false);
-      Alert.alert('성공', '게시글이 등록되었습니다.');
+      
+      if (result.pointsRewarded) {
+        Alert.alert('미션완료', '글쓰기 미션으로 50포인트를 받았습니다!');
+      }
     } catch (error: any) {
-      console.error('❌ Post creation error:', error);
       const errorMessage = error?.message || '게시글 등록에 실패했습니다.';
       Alert.alert('오류', errorMessage);
+    } finally {
+      setIsPosting(false);
     }
-  }, [postContent, selectedImages, createPost]);
+  }, [postContent, selectedImages, createPost, isPosting]);
 
   const pickImage = useCallback(async () => {
+    if (isPickingImage) return;
+
+    setIsPickingImage(true);
+
     try {
-      // 권한 요청
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== 'granted') {
         Alert.alert('알림', '갤러리 접근 권한이 필요합니다.');
+        setIsPickingImage(false);
         return;
       }
 
-      // iOS에서 MediaLibrary 권한도 요청
       if (Platform.OS === 'ios') {
         try {
-          const mediaStatus = await MediaLibrary.requestPermissionsAsync();
-          if (mediaStatus.status !== 'granted') {
-            console.warn('MediaLibrary 권한이 거부되었습니다.');
-          }
-        } catch (mediaPermError) {
-          console.warn('MediaLibrary 권한 요청 오류:', mediaPermError);
+          await MediaLibrary.requestPermissionsAsync();
+        } catch {
+          // 권한 요청 실패는 무시
         }
       }
 
-      // 이미지 선택 (에러가 발생해도 결과 처리)
       let result: ImagePicker.ImagePickerResult | null = null;
       try {
         result = await ImagePicker.launchImageLibraryAsync({
@@ -357,124 +344,88 @@ export default function StarTalkScreen() {
           exif: false,
         });
       } catch (pickerError: any) {
-        // 파일 시스템 오류는 내부적으로 발생하지만, 사용자가 이미지를 선택했다면
-        // 에러 객체에 결과가 포함되어 있을 수 있음
-        console.warn('ImagePicker 내부 오류 (계속 진행):', pickerError?.message);
-        
-        // 에러가 발생했지만, 실제로는 이미지 선택이 완료되었을 수 있음
-        // 에러를 무시하고 나중에 result를 확인
         if (pickerError?.result) {
           result = pickerError.result;
         }
-        // 에러가 발생해도 계속 진행 (결과가 없으면 나중에 처리)
       }
 
       if (result && !result.canceled && result.assets && result.assets.length > 0) {
         const asset = result.assets[0];
         let imageUri = asset.uri;
         
-        console.log('=== 이미지 선택 ===');
-        console.log('원본 URI:', imageUri);
-        console.log('Asset:', asset);
-        
-        // iOS에서 ph:// URI인 경우 로컬 URI로 변환
-        if (Platform.OS === 'ios' && imageUri && imageUri.startsWith('ph://')) {
+        if (Platform.OS === 'ios' && imageUri?.startsWith('ph://')) {
           try {
-            // assetId 찾기
             const assetId = (asset as any).assetId || (asset as any).id || (asset as any).localIdentifier;
-            console.log('Asset ID:', assetId);
             
             if (assetId) {
               const mediaLibraryAsset = await MediaLibrary.getAssetInfoAsync(assetId);
-              console.log('MediaLibrary 결과:', mediaLibraryAsset);
-              
               if (mediaLibraryAsset?.localUri) {
                 imageUri = mediaLibraryAsset.localUri;
-                console.log('변환된 로컬 URI:', imageUri);
               } else {
-                // ImageManipulator로 변환 시도
                 try {
                   const manipulated = await ImageManipulator.manipulateAsync(
                     imageUri,
                     [],
                     { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG }
                   );
-                  if (manipulated.uri) {
-                    imageUri = manipulated.uri;
-                    console.log('ImageManipulator 변환 URI:', imageUri);
-                  }
-                } catch (manipError) {
-                  console.warn('ImageManipulator 변환 실패:', manipError);
-                  // 원본 URI 사용
-                  console.log('원본 ph:// URI 사용');
+                  if (manipulated.uri) imageUri = manipulated.uri;
+                } catch {
+                  // 변환 실패 시 원본 URI 사용
                 }
               }
             } else {
-              // assetId가 없으면 ImageManipulator로 변환 시도
               try {
                 const manipulated = await ImageManipulator.manipulateAsync(
                   imageUri,
                   [],
                   { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG }
                 );
-                if (manipulated.uri) {
-                  imageUri = manipulated.uri;
-                  console.log('ImageManipulator 변환 URI (assetId 없음):', imageUri);
-                }
-              } catch (manipError) {
-                console.warn('ImageManipulator 변환 실패:', manipError);
+                if (manipulated.uri) imageUri = manipulated.uri;
+              } catch {
+                // 변환 실패 시 원본 URI 사용
               }
             }
-          } catch (mediaError) {
-            console.warn('MediaLibrary error:', mediaError);
-            // ImageManipulator로 대체 시도
+          } catch {
             try {
               const manipulated = await ImageManipulator.manipulateAsync(
                 imageUri,
                 [],
                 { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG }
               );
-              if (manipulated.uri) {
-                imageUri = manipulated.uri;
-                console.log('ImageManipulator 대체 변환 URI:', imageUri);
-              }
-            } catch (manipError) {
-              console.warn('ImageManipulator 대체 변환 실패:', manipError);
+              if (manipulated.uri) imageUri = manipulated.uri;
+            } catch {
+              // 변환 실패 시 원본 URI 사용
             }
           }
         }
         
-        // 최종 URI 확인 및 저장
         if (imageUri && (imageUri.startsWith('file://') || imageUri.startsWith('http') || imageUri.startsWith('ph://'))) {
-          console.log('✅ 최종 이미지 URI:', imageUri);
           setSelectedImages([imageUri]);
           Alert.alert('성공', '이미지가 선택되었습니다.');
         } else {
-          console.error('❌ 유효하지 않은 URI:', imageUri);
           Alert.alert('오류', '이미지 URI를 가져올 수 없습니다.');
         }
-      } else {
-        console.log('이미지 선택 취소');
       }
     } catch (error: any) {
-      // 최종 에러 처리 - 사용자에게는 간단한 메시지만 표시
-      console.error('Image picker error:', error);
-      // 파일 시스템 오류는 내부적으로 처리하고, URI가 있으면 사용
-      if (error?.message?.includes('Failed to write data')) {
-        // 파일 쓰기 오류는 무시하고 계속 진행
-        console.warn('파일 쓰기 오류 무시');
-      } else {
+      if (!error?.message?.includes('Failed to write data')) {
         Alert.alert('오류', '이미지를 선택할 수 없습니다. 다시 시도해주세요.');
       }
+    } finally {
+      setIsPickingImage(false);
     }
-  }, []);
+  }, [isPickingImage]);
 
   const takePhoto = useCallback(async () => {
+    if (isPickingImage) return;
+
+    setIsPickingImage(true);
+
     try {
       // 카메라 권한 요청
       const { status } = await ImagePicker.requestCameraPermissionsAsync();
       if (status !== 'granted') {
         Alert.alert('알림', '카메라 접근 권한이 필요합니다.');
+        setIsPickingImage(false);
         return;
       }
 
@@ -485,30 +436,26 @@ export default function StarTalkScreen() {
       });
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
-        const asset = result.assets[0];
-        let imageUri = asset.uri;
-        
-        console.log('=== 카메라 촬영 ===');
-        console.log('원본 URI:', imageUri);
-        
-        // 카메라로 촬영한 이미지는 보통 file:// URI
+        const imageUri = result.assets[0].uri;
         if (imageUri) {
-          console.log('✅ 카메라 이미지 URI:', imageUri);
           setSelectedImages([imageUri]);
           Alert.alert('성공', '사진이 촬영되었습니다.');
         } else {
-          console.error('❌ 카메라 URI 없음');
           Alert.alert('오류', '사진 URI를 가져올 수 없습니다.');
         }
       }
     } catch (error: any) {
       const errorMessage = error?.message || '알 수 없는 오류가 발생했습니다.';
       Alert.alert('오류', `사진을 촬영할 수 없습니다: ${errorMessage}`);
-      console.error('Camera error:', error);
+    } finally {
+      // 이미지 선택 완료 (성공/실패/취소 관계없이)
+      setIsPickingImage(false);
     }
-  }, []);
+  }, [isPickingImage]);
 
   const showImagePickerOptions = useCallback(() => {
+    if (isPickingImage) return;
+
     Alert.alert(
       '사진 추가',
       '사진을 선택하세요',
@@ -519,7 +466,7 @@ export default function StarTalkScreen() {
       ],
       { cancelable: true }
     );
-  }, [pickImage, takePhoto]);
+  }, [pickImage, takePhoto, isPickingImage]);
 
   const handleChatFromPost = useCallback((post: Post) => {
     if (post.authorId === currentUser.id) {
@@ -528,7 +475,19 @@ export default function StarTalkScreen() {
     }
 
     if (points < CHAT_COST) {
-      Alert.alert('알림', `포인트가 부족합니다. (필요: ${CHAT_COST}포인트)`);
+      Alert.alert(
+        '포인트 부족',
+        `포인트가 부족합니다. (필요: ${CHAT_COST}포인트)`,
+        [
+          {
+            text: '상점 가기',
+            onPress: () => {
+              navigation.navigate('Charge');
+            },
+          },
+          { text: '취소', style: 'cancel' },
+        ]
+      );
       return;
     }
 
@@ -555,7 +514,6 @@ export default function StarTalkScreen() {
                 Alert.alert('오류', '채팅을 시작할 수 없습니다.');
               }
             } catch (error: any) {
-              console.error('채팅 시작 오류:', error);
               Alert.alert('오류', '채팅을 시작하는 중 오류가 발생했습니다.');
             }
           },
@@ -610,7 +568,7 @@ export default function StarTalkScreen() {
 
   const handlePostMenu = useCallback((post: Post) => {
     const isMyPost = post.authorId === currentUser.id;
-    const author = contacts.find((c) => c.id === post.authorId);
+    const author = contactsMap.get(post.authorId);
     
     if (isMyPost) return;
 
@@ -631,14 +589,107 @@ export default function StarTalkScreen() {
       ],
       { cancelable: true }
     );
-  }, [currentUser.id, contacts, handleReportPost, handleBlockUser]);
+  }, [currentUser.id, contactsMap, handleReportPost, handleBlockUser]);
 
-  const renderPost = useCallback(({ item }: { item: Post }) => {
-    const isMyPost = item.authorId === currentUser.id;
-    // 내 게시글인 경우 currentUser를 사용, 아니면 contacts에서 찾기
-    const author = isMyPost ? currentUser : contacts.find((c) => c.id === item.authorId);
+  const handleDeletePost = useCallback(async (post: Post) => {
+    Alert.alert(
+      '게시글 삭제',
+      '게시글을 삭제하시겠습니까?',
+      [
+        {
+          text: '취소',
+          style: 'cancel',
+        },
+        {
+          text: '삭제',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await firebaseFirestoreService.deletePost(post.id);
+              // 실시간 구독이 자동으로 업데이트됨
+            } catch (error: any) {
+              Alert.alert('오류', '게시글 삭제에 실패했습니다.');
+            }
+          },
+        },
+      ]
+    );
+  }, []);
 
-    return (
+  // 스와이프 가능한 게시글 아이템 컴포넌트
+  const SwipeablePostItem = React.memo(({ post, isMyPost, author, onDelete, formatTime, navigation, onImagePress, handlePostMenu, onSwipeStart, onSwipeEnd }: {
+    post: Post;
+    isMyPost: boolean;
+    author: any;
+    onDelete: (post: Post) => void;
+    formatTime: (timestamp: number) => string;
+    navigation: NavigationProp;
+    onImagePress: (uri: string) => void;
+    handlePostMenu: (post: Post) => void;
+    onSwipeStart?: () => void;
+    onSwipeEnd?: () => void;
+  }) => {
+    const translateX = useRef(new Animated.Value(0)).current;
+    const swipeThreshold = 80;
+
+    const panResponder = useRef(
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => isMyPost,
+        onMoveShouldSetPanResponder: (_, gestureState) => {
+          return isMyPost && Math.abs(gestureState.dx) > 10;
+        },
+        onPanResponderGrant: () => {
+          // 스와이프 시작 시 스크롤 비활성화
+          if (isMyPost && onSwipeStart) {
+            onSwipeStart();
+          }
+        },
+        onPanResponderMove: (_, gestureState) => {
+          if (isMyPost) {
+            // 왼쪽으로만 스와이프 가능, 최대 스와이프 거리 제한
+            const newValue = Math.min(0, Math.max(gestureState.dx, -swipeThreshold * 1.5));
+            translateX.setValue(newValue);
+          }
+        },
+        onPanResponderRelease: (_, gestureState) => {
+          // 스와이프 종료 시 스크롤 다시 활성화
+          if (isMyPost && onSwipeEnd) {
+            onSwipeEnd();
+          }
+          if (isMyPost) {
+            if (gestureState.dx < -swipeThreshold / 2) {
+              // 절반 이상 스와이프하면 삭제 버튼 표시
+              Animated.spring(translateX, {
+                toValue: -swipeThreshold,
+                useNativeDriver: true,
+                tension: 100,
+                friction: 8,
+              }).start();
+            } else {
+              // 그렇지 않으면 원래 위치로 복귀
+              Animated.spring(translateX, {
+                toValue: 0,
+                useNativeDriver: true,
+                tension: 100,
+                friction: 8,
+              }).start();
+            }
+          }
+        },
+      })
+    ).current;
+
+    const handleDeletePress = () => {
+      Animated.timing(translateX, {
+        toValue: 0,
+        duration: 200,
+        useNativeDriver: true,
+      }).start(() => {
+        onDelete(post);
+      });
+    };
+
+    const postContent = (
       <View style={styles.postCard}>
         <View style={styles.postHeader}>
           <TouchableOpacity
@@ -655,42 +706,39 @@ export default function StarTalkScreen() {
               {author?.avatar ? (
                 <Image source={{ uri: author.avatar }} style={styles.avatarImage} />
               ) : (
-                <Text style={styles.avatarText}>{item.authorName.charAt(0)}</Text>
+                <Text style={styles.avatarText}>{post.authorName.charAt(0)}</Text>
               )}
             </View>
             <View style={styles.authorTextContainer}>
               <View style={styles.nameRow}>
-                <Text style={styles.authorName}>{item.authorName}</Text>
-                {author?.age && (
-                  <Text style={styles.age}>{author.age}세</Text>
-                )}
-                {author?.gender && (
-                  <Text style={styles.gender}>
-                    {author.gender === 'male' ? '남' : '여'}
+                <Text style={styles.authorName}>{post.authorName}</Text>
+                {author?.age && author?.gender && (
+                  <Text style={styles.age}>
+                    {author.age}{author.gender === 'male' ? '남' : '여'}
                   </Text>
                 )}
               </View>
               <Text style={styles.postTime}>
-                {formatTime(item.timestamp)}
+                {formatTime(post.timestamp)}
               </Text>
             </View>
           </TouchableOpacity>
           <View style={styles.postHeaderRight}>
             {(() => {
-              if (item.images && Array.isArray(item.images) && item.images.length > 0) {
+              if (post.images && Array.isArray(post.images) && post.images.length > 0) {
                 return (
                   <TouchableOpacity
                     style={styles.imageContainer}
-                    onPress={() => setExpandedImage(item.images[0])}
+                    onPress={() => onImagePress(post.images[0])}
                     activeOpacity={0.8}
                   >
                     <Image
-                      key={`${item.id}-img-0`}
-                      source={{ uri: item.images[0] }}
+                      key={`${post.id}-img-0`}
+                      source={{ uri: post.images[0] }}
                       style={styles.postImage}
                       resizeMode="cover"
-                      onError={(error) => {
-                        console.error('Post image load error:', error);
+                      onError={() => {
+                        // 이미지 로드 실패는 무시
                       }}
                     />
                   </TouchableOpacity>
@@ -703,7 +751,7 @@ export default function StarTalkScreen() {
                 style={styles.menuButton}
                 onPress={(e) => {
                   e.stopPropagation();
-                  handlePostMenu(item);
+                  handlePostMenu(post);
                 }}
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
               >
@@ -713,7 +761,10 @@ export default function StarTalkScreen() {
           </View>
         </View>
         <TouchableOpacity
-          style={styles.contentRow}
+          style={[
+            styles.contentRow,
+            post.images && Array.isArray(post.images) && post.images.length > 0 && styles.contentRowWithImage
+          ]}
           onPress={() => {
             if (author && !isMyPost) {
               navigation.navigate('UserProfile', { user: author });
@@ -722,19 +773,94 @@ export default function StarTalkScreen() {
           activeOpacity={0.8}
           disabled={isMyPost || !author}
         >
-          <Text style={styles.postContent}>{item.content}</Text>
+          <Text style={styles.postContent}>{post.content}</Text>
         </TouchableOpacity>
       </View>
     );
-  }, [currentUser, contacts, formatTime, handleChatFromPost, navigation]);
+
+    if (!isMyPost) {
+      return postContent;
+    }
+
+    return (
+      <View style={styles.swipeableContainer}>
+        <Animated.View
+          style={[
+            styles.swipeableContent,
+            {
+              transform: [{ translateX }],
+            },
+          ]}
+          {...panResponder.panHandlers}
+        >
+          {postContent}
+        </Animated.View>
+        <Animated.View
+          style={[
+            styles.deleteButtonContainer,
+            {
+              opacity: translateX.interpolate({
+                inputRange: [-swipeThreshold, 0],
+                outputRange: [1, 0],
+                extrapolate: 'clamp',
+              }),
+            },
+          ]}
+        >
+          <TouchableOpacity
+            style={styles.deleteButton}
+            onPress={handleDeletePress}
+            activeOpacity={0.8}
+          >
+            <Image
+              source={require('../assets/deleteicon.png')}
+              style={styles.deleteButtonIcon}
+              resizeMode="contain"
+              onError={() => {
+                // 아이콘 로드 실패는 무시
+              }}
+            />
+          </TouchableOpacity>
+        </Animated.View>
+      </View>
+    );
+  });
+
+  const renderPost = useCallback(({ item }: { item: Post }) => {
+    const isMyPost = item.authorId === currentUser.id;
+    const author = isMyPost ? currentUser : contactsMap.get(item.authorId);
+
+    return (
+      <SwipeablePostItem
+        post={item}
+        isMyPost={isMyPost}
+        author={author}
+        onDelete={handleDeletePost}
+        formatTime={formatTime}
+        navigation={navigation}
+        onImagePress={(uri) => setExpandedImage(uri)}
+        handlePostMenu={handlePostMenu}
+        onSwipeStart={() => setIsSwiping(true)}
+        onSwipeEnd={() => setIsSwiping(false)}
+      />
+    );
+  }, [currentUser, contactsMap, formatTime, handleDeletePost, navigation, handlePostMenu, setExpandedImage]);
 
   const keyExtractor = useCallback((item: Post) => item.id, []);
+
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    // 실시간 구독이 자동으로 업데이트되므로 짧은 딜레이 후 새로고침 상태 해제
+    setTimeout(() => {
+      setRefreshing(false);
+    }, 1000);
+  }, []);
 
   return (
     <View style={styles.container}>
       <View style={styles.header}>
         <View style={styles.headerTop}>
-          <Text style={styles.title}>별톡</Text>
+          <Text style={styles.title}>에쎔톡</Text>
           <TouchableOpacity
             style={styles.pointsContainer}
             onPress={() => navigation.navigate('Charge')}
@@ -748,7 +874,7 @@ export default function StarTalkScreen() {
             <Text style={styles.pointsText}>{points}P</Text>
           </TouchableOpacity>
         </View>
-        <Text style={styles.subtitle}>안녕하세요, {currentUser.name}님</Text>
+        <Text style={styles.subtitle}>새로운 이야기를 나눠보세요</Text>
       </View>
 
       {/* 드롭다운 오버레이 */}
@@ -1085,6 +1211,14 @@ export default function StarTalkScreen() {
         keyExtractor={keyExtractor}
         renderItem={renderPost}
         contentContainerStyle={styles.postList}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor="#1F2937"
+            colors={['#1F2937']}
+          />
+        }
         ListEmptyComponent={
           <View style={styles.emptyState}>
             <Text style={styles.emptyText}>
@@ -1112,11 +1246,15 @@ export default function StarTalkScreen() {
         removeClippedSubviews={true}
         maxToRenderPerBatch={10}
         windowSize={10}
+        scrollEnabled={!isSwiping}
       />
 
       <TouchableOpacity
         style={styles.writeButton}
-        onPress={() => setIsWriting(true)}
+        onPress={() => {
+          setIsPickingImage(false); // 모달 열 때 이미지 선택 상태 초기화
+          setIsWriting(true);
+        }}
         activeOpacity={0.8}
       >
         <View style={styles.writeButtonContent}>
@@ -1129,77 +1267,128 @@ export default function StarTalkScreen() {
         visible={isWriting}
         animationType="slide"
         transparent={true}
-        onRequestClose={() => setIsWriting(false)}
+        onRequestClose={() => {
+          setIsWriting(false);
+          setIsPickingImage(false); // 모달 닫을 때 이미지 선택 상태 초기화
+        }}
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>게시글 작성</Text>
-              <TouchableOpacity onPress={() => setIsWriting(false)}>
-                <Text style={styles.modalClose}>✕</Text>
-              </TouchableOpacity>
-            </View>
-            <ScrollView style={styles.modalBody}>
-              <TextInput
-                style={styles.postInput}
-                placeholder="무엇을 공유하고 싶으신가요?"
-                value={postContent}
-                onChangeText={setPostContent}
-                multiline
-                maxLength={500}
-                textAlignVertical="top"
-              />
-              {selectedImages.length > 0 && (
-                <View style={styles.imagePreviewContainer}>
-                  {selectedImages.map((image, index) => (
-                    <View key={index} style={styles.imagePreview}>
-                      <Image 
-                        source={{ uri: image }} 
-                        style={styles.previewImage}
-                        resizeMode="cover"
-                        onError={(error) => {
-                          console.error('Image load error:', error);
-                          Alert.alert('오류', '이미지를 불러올 수 없습니다.');
-                        }}
-                      />
-                      <TouchableOpacity
-                        style={styles.removeImageButton}
-                        onPress={() => setSelectedImages([])}
-                      >
-                        <Text style={styles.removeImageText}>✕</Text>
-                      </TouchableOpacity>
-                    </View>
-                  ))}
-                </View>
-              )}
-              {selectedImages.length === 0 && (
-                <TouchableOpacity
-                  style={styles.addImageButton}
-                  onPress={showImagePickerOptions}
-                >
-                  <Text style={styles.addImageText}>📷 사진 추가</Text>
-                </TouchableOpacity>
-              )}
-              {selectedImages.length > 0 && (
-                <TouchableOpacity
-                  style={styles.changeImageButton}
-                  onPress={showImagePickerOptions}
-                >
-                  <Text style={styles.changeImageText}>🔄 사진 변경</Text>
-                </TouchableOpacity>
-              )}
-            </ScrollView>
-            <View style={styles.modalFooter}>
-              <TouchableOpacity
-                style={[styles.submitButton, !postContent.trim() && styles.submitButtonDisabled]}
-                onPress={handlePost}
-                disabled={!postContent.trim()}
+        <TouchableWithoutFeedback onPress={() => {
+          setIsWriting(false);
+          setIsPickingImage(false); // 모달 닫을 때 이미지 선택 상태 초기화
+        }}>
+          <View style={styles.modalOverlay}>
+            <TouchableWithoutFeedback>
+              <KeyboardAvoidingView
+                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
+                style={styles.modalKeyboardAvoidingView}
               >
-                <Text style={styles.submitButtonText}>등록</Text>
-              </TouchableOpacity>
-            </View>
+                <View style={styles.modalContent}>
+                  <View style={styles.modalHeader}>
+                    <Text style={styles.modalTitle}>게시글 작성</Text>
+                    <TouchableOpacity onPress={() => {
+                      setIsWriting(false);
+                      setIsPickingImage(false); // 모달 닫을 때 이미지 선택 상태 초기화
+                    }}>
+                      <Text style={styles.modalClose}>✕</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <ScrollView 
+                    style={styles.modalBody}
+                    keyboardShouldPersistTaps="handled"
+                    contentContainerStyle={styles.modalBodyContent}
+                    showsVerticalScrollIndicator={true}
+                  >
+                    <TextInput
+                      style={styles.postInput}
+                      placeholder="무엇을 공유하고 싶으신가요?"
+                      value={postContent}
+                      onChangeText={setPostContent}
+                      multiline
+                      maxLength={500}
+                      textAlignVertical="top"
+                    />
+                    {selectedImages.length > 0 && (
+                      <View style={styles.imagePreviewContainer}>
+                        {selectedImages.map((image, index) => (
+                          <View key={index} style={styles.imagePreview}>
+                            <Image 
+                              source={{ uri: image }} 
+                              style={styles.previewImage}
+                              resizeMode="cover"
+                              onError={() => {
+                                Alert.alert('오류', '이미지를 불러올 수 없습니다.');
+                              }}
+                            />
+                            <TouchableOpacity
+                              style={styles.removeImageButton}
+                              onPress={() => setSelectedImages([])}
+                            >
+                              <Text style={styles.removeImageText}>✕</Text>
+                            </TouchableOpacity>
+                          </View>
+                        ))}
+                      </View>
+                    )}
+                    {selectedImages.length === 0 && (
+                      <TouchableOpacity
+                        style={[styles.addImageButton, isPickingImage && styles.addImageButtonDisabled]}
+                        onPress={showImagePickerOptions}
+                        disabled={isPickingImage}
+                      >
+                        {isPickingImage ? (
+                          <ActivityIndicator size="small" color="#667085" />
+                        ) : (
+                          <>
+                            <Image
+                              source={require('../assets/photoicon.png')}
+                              style={styles.addImageIcon}
+                              resizeMode="contain"
+                            />
+                            <Text style={styles.addImageText}>사진 추가</Text>
+                          </>
+                        )}
+                      </TouchableOpacity>
+                    )}
+                    {selectedImages.length > 0 && (
+                      <TouchableOpacity
+                        style={[styles.changeImageButton, isPickingImage && styles.changeImageButtonDisabled]}
+                        onPress={showImagePickerOptions}
+                        disabled={isPickingImage}
+                      >
+                        {isPickingImage ? (
+                          <ActivityIndicator size="small" color="#1F2937" />
+                        ) : (
+                          <>
+                            <Image
+                              source={require('../assets/photoicon.png')}
+                              style={styles.changeImageIcon}
+                              resizeMode="contain"
+                            />
+                            <Text style={styles.changeImageText}>사진 변경</Text>
+                          </>
+                        )}
+                      </TouchableOpacity>
+                    )}
+                  </ScrollView>
+                  <View style={styles.modalFooter}>
+                    <TouchableOpacity
+                      style={[styles.submitButton, (!postContent.trim() || isPosting) && styles.submitButtonDisabled]}
+                      onPress={handlePost}
+                      disabled={!postContent.trim() || isPosting}
+                    >
+                      {isPosting ? (
+                        <ActivityIndicator size="small" color="#fff" />
+                      ) : (
+                        <Text style={styles.submitButtonText}>등록</Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </KeyboardAvoidingView>
+            </TouchableWithoutFeedback>
           </View>
-        </View>
+        </TouchableWithoutFeedback>
       </Modal>
 
       {/* 이미지 확대 모달 */}
@@ -1253,6 +1442,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    marginBottom: 6,
   },
   title: {
     fontSize: 24,
@@ -1307,7 +1497,7 @@ const styles = StyleSheet.create({
   filterBarLabel: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#1F2937',
+    color: '#5F6B8A',
     letterSpacing: 0.2,
   },
   filterBarLabelActive: {
@@ -1356,8 +1546,8 @@ const styles = StyleSheet.create({
   postCard: {
     backgroundColor: '#fff',
     borderRadius: 0,
-    padding: 16,
-    paddingHorizontal: 20,
+    padding: 20,
+    paddingHorizontal: 24,
     marginBottom: 0,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#E5E7EB',
@@ -1383,6 +1573,7 @@ const styles = StyleSheet.create({
   },
   menuButton: {
     padding: 4,
+    marginTop: -4,
   },
   menuButtonText: {
     fontSize: 20,
@@ -1428,16 +1619,16 @@ const styles = StyleSheet.create({
     marginRight: 6,
   },
   age: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '500',
-    color: 'rgba(31, 41, 55, 0.12)',
+    color: '#666',
     marginRight: 6,
   },
   gender: {
     fontSize: 13,
     fontWeight: '500',
-    color: 'rgba(31, 41, 55, 0.12)',
-    marginRight: 6,
+    color: '#666',
+    marginRight: 8,
   },
   postTime: {
     fontSize: 12,
@@ -1446,19 +1637,22 @@ const styles = StyleSheet.create({
   contentRow: {
     marginBottom: 12,
   },
+  contentRowWithImage: {
+    paddingRight: 80, // 이미지 영역(70) + 여백(10)을 고려한 패딩
+  },
   postContent: {
     fontSize: 15,
     color: '#222',
     lineHeight: 22,
   },
   imageContainer: {
-    width: 80,
-    height: 80,
+    width: 70,
+    height: 70,
     borderRadius: 8,
     overflow: 'hidden',
     position: 'absolute',
     right: 0,
-    top: 0,
+    top: 24,
   },
   postImage: {
     width: '100%',
@@ -1513,11 +1707,16 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'flex-end',
   },
+  modalKeyboardAvoidingView: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
   modalContent: {
     backgroundColor: '#fff',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     maxHeight: '90%',
+    minHeight: '50%',
   },
   modalHeader: {
     flexDirection: 'row',
@@ -1537,7 +1736,11 @@ const styles = StyleSheet.create({
     color: '#888',
   },
   modalBody: {
+    flex: 1,
+  },
+  modalBodyContent: {
     padding: 20,
+    flexGrow: 1,
   },
   postInput: {
     minHeight: 150,
@@ -1584,6 +1787,16 @@ const styles = StyleSheet.create({
     padding: 16,
     alignItems: 'center',
     marginBottom: 16,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  addImageButtonDisabled: {
+    opacity: 0.5,
+  },
+  addImageIcon: {
+    width: 20,
+    height: 20,
   },
   addImageText: {
     fontSize: 14,
@@ -1597,6 +1810,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 16,
     backgroundColor: '#F0F4FF',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  changeImageButtonDisabled: {
+    opacity: 0.5,
+  },
+  changeImageIcon: {
+    width: 20,
+    height: 20,
   },
   changeImageText: {
     fontSize: 14,
@@ -1655,5 +1878,46 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 24,
     fontWeight: 'bold',
+  },
+  swipeableContainer: {
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  swipeableContent: {
+    backgroundColor: '#fff',
+  },
+  deleteButtonContainer: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: 80,
+    backgroundColor: '#DC2626',
+  },
+  deleteButton: {
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+  },
+  deleteButtonIcon: {
+    width: 24,
+    height: 24,
+    tintColor: '#fff',
+  },
+  deleteButtonInline: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: '#FF6B6B',
+    borderRadius: 6,
+    marginLeft: 8,
+  },
+  deleteButtonTextInline: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
   },
 });

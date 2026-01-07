@@ -4,19 +4,28 @@
  */
 
 import * as Notifications from 'expo-notifications';
-import { Platform } from 'react-native';
+import { Platform, Alert } from 'react-native';
+import Constants from 'expo-constants';
 import { firebaseFirestoreService } from './FirebaseFirestoreService';
 import { auth } from '../config/firebase';
 
 // 알림 핸들러 설정 (네이티브 모듈이 사용 가능한 경우에만)
+// 포그라운드일 때만 작동하며, 백그라운드에서는 Expo Push API를 통해 전송된 알림이 자동으로 표시됩니다
 try {
   if (Notifications.setNotificationHandler) {
     Notifications.setNotificationHandler({
-      handleNotification: async () => ({
-        shouldShowAlert: true,
-        shouldPlaySound: true,
-        shouldSetBadge: true,
-      }),
+      handleNotification: async (notification) => {
+        console.log('[알림 핸들러] 알림 수신:', {
+          title: notification.request.content.title,
+          body: notification.request.content.body,
+          data: notification.request.content.data,
+        });
+        return {
+          shouldShowAlert: true,
+          shouldPlaySound: true,
+          shouldSetBadge: true,
+        };
+      },
     });
   }
 } catch (error) {
@@ -164,6 +173,46 @@ class NotificationService {
   }
 
   /**
+   * 문의 답변 알림 표시
+   */
+  async showInquiryAnswerNotification(answer: string): Promise<void> {
+    try {
+      // 네이티브 모듈이 사용 가능한지 확인
+      if (!Notifications.scheduleNotificationAsync) {
+        console.warn('알림 네이티브 모듈이 아직 준비되지 않았습니다.');
+        return;
+      }
+
+      const hasPermission = await this.requestPermissions();
+      if (!hasPermission) {
+        return;
+      }
+
+      // 답변 텍스트가 너무 길면 잘라내기
+      const truncatedAnswer = answer.length > 100 
+        ? answer.substring(0, 100) + '...' 
+        : answer;
+
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: '고객센터 답변',
+          body: `문의하신 내용에 대한 답변이 도착했습니다.\n\n${truncatedAnswer}`,
+          data: { type: 'inquiry_answer' },
+          sound: true,
+        },
+        trigger: null, // 즉시 표시
+      });
+    } catch (error: any) {
+      // 네이티브 모듈 오류인 경우 조용히 처리
+      if (error.message?.includes('native module') || error.message?.includes('ExpoPushTokenManager')) {
+        console.warn('알림 네이티브 모듈이 아직 준비되지 않았습니다. 앱을 재빌드해주세요.');
+        return;
+      }
+      console.error('문의 답변 알림 표시 실패:', error);
+    }
+  }
+
+  /**
    * 알림 배지 초기화
    */
   async clearBadge(): Promise<void> {
@@ -178,6 +227,27 @@ class NotificationService {
         return;
       }
       console.error('배지 초기화 실패:', error);
+    }
+  }
+
+  /**
+   * iOS 홈 화면 아이콘 배지 번호 설정
+   */
+  async setBadgeCount(count: number): Promise<void> {
+    try {
+      if (!Notifications.setBadgeCountAsync) {
+        return;
+      }
+      // iOS에서만 배지 표시
+      if (Platform.OS === 'ios') {
+        await Notifications.setBadgeCountAsync(count);
+      }
+    } catch (error: any) {
+      // 네이티브 모듈 오류인 경우 조용히 처리
+      if (error.message?.includes('native module') || error.message?.includes('ExpoPushTokenManager')) {
+        return;
+      }
+      console.error('배지 번호 설정 실패:', error);
     }
   }
 
@@ -236,9 +306,81 @@ class NotificationService {
       }
 
       // Expo SDK 49+ 에서는 projectId를 자동으로 감지합니다
-      // 명시적으로 설정하려면 app.json의 extra.eas.projectId를 사용하거나
-      // 환경 변수에서 가져올 수 있습니다
-      const tokenData = await Notifications.getExpoPushTokenAsync();
+      // app.json의 extra.eas.projectId가 있으면 자동으로 사용됩니다
+      // 없으면 Expo가 자동으로 감지하려고 시도합니다
+      console.log('[푸시 토큰] Expo Push 토큰 가져오기 시작...');
+      
+      // projectId 가져오기 시도
+      let projectId: string | undefined = undefined;
+      
+      // 1. expo-constants에서 가져오기 시도
+      try {
+        projectId = Constants.expoConfig?.extra?.eas?.projectId;
+        if (projectId) {
+          console.log('[푸시 토큰] expo-constants에서 projectId 발견:', projectId);
+        }
+      } catch (e) {
+        console.warn('[푸시 토큰] expo-constants에서 projectId 가져오기 실패:', e);
+      }
+      
+      // 2. 환경 변수에서 가져오기 시도
+      if (!projectId) {
+        projectId = process.env.EXPO_PUBLIC_EAS_PROJECT_ID;
+        if (projectId) {
+          console.log('[푸시 토큰] 환경 변수에서 projectId 발견:', projectId);
+        }
+      }
+      
+      let tokenData;
+      try {
+        if (projectId) {
+          // projectId가 있으면 명시적으로 전달
+          console.log('[푸시 토큰] projectId로 토큰 가져오기:', projectId);
+          tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
+        } else {
+          // projectId가 없으면 자동 감지 시도
+          console.log('[푸시 토큰] projectId 없이 자동 감지 시도...');
+          tokenData = await Notifications.getExpoPushTokenAsync();
+        }
+      } catch (error: any) {
+        // projectId가 필요한 경우 에러 메시지 표시
+        if (error.message?.includes('projectId')) {
+          const errorMessage = `푸시 알림을 사용하려면 Expo EAS Project ID가 필요합니다.\n\n해결 방법:\n1. Expo 계정에 로그인: npx expo login\n2. EAS 프로젝트 생성: npx eas init\n3. 생성된 projectId를 app.json의 extra.eas.projectId에 추가\n\n에러: ${error.message}`;
+          console.error('[푸시 토큰] ❌ projectId 필요:', errorMessage);
+          
+          // 개발 모드에서 Alert 표시
+          if (__DEV__) {
+            Alert.alert(
+              '⚠️ 푸시 알림 설정 필요',
+              errorMessage,
+              [
+                { text: '나중에', style: 'cancel' },
+                { 
+                  text: '설정 방법 보기', 
+                  onPress: () => {
+                    Alert.alert(
+                      'EAS Project ID 설정 방법',
+                      '1. 터미널에서 실행:\n   npx expo login\n   npx eas init\n\n2. 생성된 projectId를 복사\n\n3. app.json에 추가:\n   "extra": {\n     "eas": {\n       "projectId": "여기에_복사한_ID"\n     }\n   }',
+                      [{ text: '확인' }]
+                    );
+                  }
+                }
+              ]
+            );
+          }
+          
+          // 개발 모드에서는 null 반환하여 앱이 계속 작동하도록 함
+          // 프로덕션에서는 에러를 throw해야 함
+          if (__DEV__) {
+            console.warn('[푸시 토큰] 개발 모드: projectId 없이 계속 진행 (푸시 알림은 작동하지 않음)');
+            return null;
+          } else {
+            throw error;
+          }
+        } else {
+          throw error;
+        }
+      }
 
       const token = tokenData.data;
       this.expoPushToken = token;
@@ -248,10 +390,21 @@ class NotificationService {
       if (firebaseUser && token) {
         try {
           await firebaseFirestoreService.updatePushToken(firebaseUser.uid, token);
-          console.log('푸시 토큰 저장 완료:', token.substring(0, 20) + '...');
+          console.log('[푸시 토큰] 저장 완료:', {
+            userId: firebaseUser.uid,
+            tokenPreview: token.substring(0, 30) + '...',
+            fullToken: token, // 디버깅용 전체 토큰 출력
+            platform: Platform.OS,
+          });
         } catch (error) {
-          console.error('푸시 토큰 저장 실패:', error);
+          console.error('[푸시 토큰] 저장 실패:', error);
         }
+      } else {
+        console.warn('[푸시 토큰] 저장 실패 - 사용자 또는 토큰 없음:', {
+          hasUser: !!firebaseUser,
+          hasToken: !!token,
+          userId: firebaseUser?.uid,
+        });
       }
 
       // 토큰 변경 감지 리스너 설정

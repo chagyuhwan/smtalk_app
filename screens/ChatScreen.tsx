@@ -11,44 +11,35 @@ import {
   Alert,
   Pressable,
   Image,
+  ActivityIndicator,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as ImagePicker from 'expo-image-picker';
 import { RouteProp, useRoute, useNavigation, useFocusEffect } from '@react-navigation/native';
 import { RootStackParamList } from '../navigation/types';
 import { useChat } from '../context/ChatContext';
 import { Message, ReportReason } from '../types';
 import { firebaseFirestoreService } from '../services/FirebaseFirestoreService';
+import { firebaseStorageService } from '../services/FirebaseStorageService';
 import { performanceMonitor } from '../utils/PerformanceMonitor';
+import { formatTime } from '../utils/time';
+import { getAvatarColor, getInitial } from '../utils/avatar';
 
 type ChatRouteProp = RouteProp<RootStackParamList, 'Chat'>;
-
-// 시간 포맷팅 함수를 컴포넌트 외부로 이동하여 재생성 방지
-const formatTime = (timestamp: number): string => {
-  return new Date(timestamp).toLocaleTimeString('ko-KR', {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-};
-
-// 아바타 색상 생성 함수
-const getAvatarColor = (id: string) => {
-  const colors = ['#1F2937', '#FF6B6B', '#4ECDC4', '#1F2937', '#FFD93D', '#1F2937'];
-  return colors[id.length % colors.length];
-};
-
-// 이니셜 가져오기 함수
-const getInitial = (name: string) => {
-  return name.charAt(0).toUpperCase() || '?';
-};
 
 export default function ChatScreen() {
   const { params } = useRoute<ChatRouteProp>();
   const navigation = useNavigation();
   const { chatRoomId, partner } = params;
   const { getMessages, sendMessage, markAsRead, currentUser, blockUser, reportUser, isBlocked, contacts, setCurrentChatRoomId } = useChat();
+  const insets = useSafeAreaInsets();
   const [text, setText] = useState('');
   const flatListRef = useRef<FlatList<Message>>(null);
   const [firestoreMessages, setFirestoreMessages] = useState<Message[]>([]);
   const unsubscribeMessagesRef = useRef<(() => void) | null>(null);
+  const lastMessageIdRef = useRef<string | null>(null);
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
 
   // 성능 측정: 화면 포커스 시
   useFocusEffect(
@@ -70,24 +61,22 @@ export default function ChatScreen() {
 
   // Firestore에서 메시지 실시간 구독
   useEffect(() => {
-    console.log('메시지 실시간 구독 시작:', chatRoomId);
+    lastMessageIdRef.current = null;
     
     const unsubscribe = firebaseFirestoreService.subscribeToMessages(
       chatRoomId,
       (messages) => {
-        console.log('메시지 실시간 업데이트:', messages.length, '개');
         setFirestoreMessages(messages);
       },
-      100 // 최대 100개 메시지
+      100
     );
 
-    // 구독 해제 함수를 ref에 저장
     unsubscribeMessagesRef.current = unsubscribe;
 
     return () => {
-      console.log('메시지 구독 해제:', chatRoomId);
       unsubscribe();
       unsubscribeMessagesRef.current = null;
+      lastMessageIdRef.current = null;
     };
   }, [chatRoomId]);
 
@@ -105,20 +94,147 @@ export default function ChatScreen() {
     markAsRead(chatRoomId);
   }, [chatRoomId, markAsRead]);
 
+  // 메시지가 업데이트될 때마다 스크롤을 맨 아래로 이동
   useEffect(() => {
     if (messages.length === 0) return;
-    const timeout = setTimeout(() => {
-      flatListRef.current?.scrollToEnd({ animated: true });
-    }, 80);
-    return () => clearTimeout(timeout);
+    
+    const lastMessage = messages[messages.length - 1];
+    const lastMessageId = lastMessage?.id;
+    
+    // 새 메시지가 추가되었는지 확인
+    if (lastMessageId && lastMessageId !== lastMessageIdRef.current) {
+      lastMessageIdRef.current = lastMessageId;
+      
+      // 약간의 지연 후 스크롤 (렌더링 완료 대기)
+      const timeout = setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 150);
+      return () => clearTimeout(timeout);
+    }
+    
+    // 첫 로드 시에도 스크롤
+    if (!lastMessageIdRef.current && lastMessageId) {
+      lastMessageIdRef.current = lastMessageId;
+      // 첫 로드 시에는 여러 번 시도하여 확실히 스크롤
+      const timeouts: NodeJS.Timeout[] = [];
+      timeouts.push(setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: false });
+      }, 100));
+      timeouts.push(setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: false });
+      }, 300));
+      timeouts.push(setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: false });
+      }, 500));
+      return () => timeouts.forEach(clearTimeout);
+    }
+  }, [messages]);
+
+  // FlatList의 내용 크기가 변경될 때마다 맨 아래로 스크롤
+  const handleContentSizeChange = useCallback(() => {
+    if (messages.length > 0) {
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 100);
+    }
   }, [messages.length]);
 
-  const handleSend = useCallback(() => {
+  // FlatList가 레이아웃될 때 맨 아래로 스크롤
+  const handleLayout = useCallback(() => {
+    if (messages.length > 0) {
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: false });
+      }, 100);
+    }
+  }, [messages.length]);
+
+  const handleSend = useCallback(async () => {
     const trimmed = text.trim();
-    if (!trimmed) return;
-    sendMessage(chatRoomId, trimmed);
-    setText('');
-  }, [text, chatRoomId, sendMessage]);
+    const hasImage = selectedImage !== null;
+    
+    if (!trimmed && !hasImage) return;
+    
+    setIsUploadingImage(true);
+    
+    try {
+      let imageUrls: string[] = [];
+      
+      // 이미지가 있으면 업로드
+      if (hasImage && selectedImage) {
+        const messageId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+        const imageUrl = await firebaseStorageService.uploadMessageImage(
+          chatRoomId,
+          messageId,
+          selectedImage,
+          0
+        );
+        imageUrls = [imageUrl];
+      }
+      
+      // 텍스트와 이미지를 함께 전송
+      if (imageUrls.length > 0) {
+        await sendMessageWithImage(chatRoomId, trimmed, imageUrls);
+      } else {
+        sendMessage(chatRoomId, trimmed);
+      }
+      
+      // 상태 초기화
+      setText('');
+      setSelectedImage(null);
+      
+      // 메시지 전송 후 즉시 맨 아래로 스크롤
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 200);
+    } catch (error: any) {
+      Alert.alert('오류', '메시지 전송에 실패했습니다.');
+    } finally {
+      setIsUploadingImage(false);
+    }
+  }, [text, selectedImage, chatRoomId, sendMessage, sendMessageWithImage]);
+
+  const sendMessageWithImage = useCallback(async (roomId: string, text: string, images: string[]) => {
+    try {
+      await firebaseFirestoreService.sendMessage({
+        chatRoomId: roomId,
+        senderId: currentUser.id,
+        receiverId: partner.id,
+        text: text || '',
+        images: images.length > 0 ? images : undefined,
+      });
+    } catch (error: any) {
+      console.error('메시지 전송 실패:', error);
+      throw error;
+    }
+  }, [currentUser.id, partner.id]);
+
+  const handlePickImage = useCallback(async () => {
+    try {
+      // 권한 요청
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('권한 필요', '이미지를 선택하려면 사진 라이브러리 접근 권한이 필요합니다.');
+        return;
+      }
+
+      // 이미지 선택
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsMultipleSelection: false,
+        quality: 0.8,
+      });
+
+      if (result.canceled || !result.assets || result.assets.length === 0) {
+        return;
+      }
+
+      const imageUri = result.assets[0].uri;
+      // 이미지를 state에 저장 (자동 전송하지 않음)
+      setSelectedImage(imageUri);
+    } catch (error: any) {
+      Alert.alert('오류', '이미지를 선택하는 중 오류가 발생했습니다.');
+    }
+  }, []);
 
   // contacts를 Map으로 변환하여 빠른 조회
   const contactsMap = useMemo(() => {
@@ -136,7 +252,8 @@ export default function ChatScreen() {
     const sender = contactsMap.get(item.senderId) || (isMe ? currentUser : partner);
     const senderName = sender?.name || '알 수 없음';
     const senderAvatar = sender?.avatar;
-    const avatarColor = getAvatarColor(item.senderId);
+    const senderGender = sender?.gender;
+    const avatarColor = getAvatarColor(senderGender, !!senderAvatar);
     const initial = getInitial(senderName);
 
     return (
@@ -157,7 +274,21 @@ export default function ChatScreen() {
             <Text style={styles.senderName}>{senderName}</Text>
           )}
           <View style={[styles.messageBubble, isMe ? styles.myBubble : styles.partnerBubble]}>
-            <Text style={[styles.messageText, isMe ? styles.myText : styles.partnerText]}>{item.text}</Text>
+            {item.images && item.images.length > 0 && (
+              <View style={styles.messageImages}>
+                {item.images.map((imageUrl, index) => (
+                  <Image
+                    key={index}
+                    source={{ uri: imageUrl }}
+                    style={styles.messageImage}
+                    resizeMode="cover"
+                  />
+                ))}
+              </View>
+            )}
+            {item.text && (
+              <Text style={[styles.messageText, isMe ? styles.myText : styles.partnerText]}>{item.text}</Text>
+            )}
             <Text style={[styles.timestamp, isMe ? styles.myTimestamp : styles.partnerTimestamp]}>
               {formatTime(item.timestamp)}
             </Text>
@@ -247,7 +378,6 @@ export default function ChatScreen() {
             try {
               // 먼저 메시지 구독 해제 (권한 오류 방지)
               if (unsubscribeMessagesRef.current) {
-                console.log('채팅방 삭제 전 메시지 구독 해제');
                 unsubscribeMessagesRef.current();
                 unsubscribeMessagesRef.current = null;
               }
@@ -263,7 +393,6 @@ export default function ChatScreen() {
                 },
               ]);
             } catch (error: any) {
-              console.error('채팅방 삭제 실패:', error);
               // 권한 오류나 이미 삭제된 경우는 성공으로 처리
               if (error.code === 'permission-denied' || error.code === 'not-found') {
                 Alert.alert('삭제 완료', '채팅방이 삭제되었습니다.', [
@@ -304,34 +433,6 @@ export default function ChatScreen() {
   // 차단된 사용자인지 확인
   const isUserBlocked = useMemo(() => isBlocked(partner.id), [partner.id, isBlocked]);
 
-  useEffect(() => {
-    // 헤더에 메뉴 버튼 추가 - headerTitle은 기본 텍스트로 유지하고 headerRight에 배치
-    navigation.setOptions({
-      headerTitle: partner.name, // 기본 텍스트로 설정하여 중앙 정렬 유지
-      headerTitleAlign: 'center' as const,
-      headerRight: () => (
-        <View style={{ backgroundColor: 'transparent' }}>
-          <Pressable
-            onPress={handleMenuPress}
-            style={({ pressed }) => [
-              {
-                padding: 8,
-                opacity: pressed ? 0.7 : 1,
-              }
-            ]}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Text style={{ fontSize: 20, color: '#1F2937', fontWeight: '600' }}>⋯</Text>
-          </Pressable>
-        </View>
-      ),
-      headerRightContainerStyle: {
-        backgroundColor: 'transparent',
-        paddingRight: 0,
-        marginRight: 0,
-      },
-    });
-  }, [navigation, partner, handleMenuPress]);
 
   // 차단된 사용자면 채팅방에서 나가기
   useEffect(() => {
@@ -361,8 +462,23 @@ export default function ChatScreen() {
     <KeyboardAvoidingView
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 88 : 0}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? -insets.bottom : 0}
     >
+      <View style={styles.header}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => navigation.goBack()}
+        >
+          <Text style={styles.backButtonText}>‹</Text>
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>{partner.name}</Text>
+        <TouchableOpacity
+          style={styles.menuButton}
+          onPress={handleMenuPress}
+        >
+          <Text style={styles.menuButtonText}>⋯</Text>
+        </TouchableOpacity>
+      </View>
       <FlatList
         ref={flatListRef}
         data={messages}
@@ -375,11 +491,41 @@ export default function ChatScreen() {
             <Text style={styles.emptyTitle}>{partner.name}님과의 첫 대화를 시작해보세요!</Text>
           </View>
         }
-        removeClippedSubviews={true}
+        extraData={messages.length}
+        removeClippedSubviews={false}
         maxToRenderPerBatch={10}
         windowSize={10}
+        onContentSizeChange={handleContentSizeChange}
+        onLayout={handleLayout}
+        inverted={false}
+        maintainVisibleContentPosition={{
+          minIndexForVisible: 0,
+        }}
       />
-      <View style={styles.inputWrapper}>
+      {selectedImage && (
+        <View style={styles.imagePreviewContainer}>
+          <Image source={{ uri: selectedImage }} style={styles.imagePreview} resizeMode="cover" />
+          <TouchableOpacity
+            style={styles.removeImageButton}
+            onPress={() => setSelectedImage(null)}
+          >
+            <Text style={styles.removeImageText}>✕</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+      <View style={[styles.inputWrapper, { paddingBottom: Math.max(insets.bottom, 8) }]}>
+        <TouchableOpacity
+          style={styles.imageButton}
+          onPress={handlePickImage}
+          disabled={isUploadingImage}
+          activeOpacity={0.7}
+        >
+          <Image
+            source={require('../assets/photoicon.png')}
+            style={styles.imageButtonIcon}
+            resizeMode="contain"
+          />
+        </TouchableOpacity>
         <TextInput
           style={styles.input}
           value={text}
@@ -387,12 +533,16 @@ export default function ChatScreen() {
           placeholder="메시지 입력..."
         />
         <TouchableOpacity
-          style={[styles.sendButton, !text.trim() && styles.disabledSendButton]}
+          style={[styles.sendButton, (!text.trim() && !selectedImage && !isUploadingImage) && styles.disabledSendButton]}
           onPress={handleSend}
-          disabled={!text.trim()}
+          disabled={(!text.trim() && !selectedImage) || isUploadingImage}
           activeOpacity={0.8}
         >
-          <Text style={styles.sendText}>전송</Text>
+          {isUploadingImage ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <Text style={styles.sendText}>전송</Text>
+          )}
         </TouchableOpacity>
       </View>
     </KeyboardAvoidingView>
@@ -403,6 +553,46 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#EEF1F7',
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingTop: 50,
+    paddingHorizontal: 20,
+    paddingBottom: 16,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  backButton: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  backButtonText: {
+    fontSize: 28,
+    color: '#111',
+    fontWeight: '300',
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#111',
+    flex: 1,
+    textAlign: 'center',
+  },
+  menuButton: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  menuButtonText: {
+    fontSize: 20,
+    color: '#1F2937',
+    fontWeight: '600',
   },
   messageList: {
     paddingHorizontal: 16,
@@ -484,13 +674,39 @@ const styles = StyleSheet.create({
   partnerTimestamp: {
     color: '#8892B0',
   },
+  messageImages: {
+    marginBottom: 8,
+    marginHorizontal: -16,
+    marginTop: -10,
+  },
+  messageImage: {
+    width: '100%',
+    aspectRatio: 1,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+    marginBottom: 0,
+  },
   inputWrapper: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    padding: 12,
+    padding: 8,
+    paddingBottom: 8,
     backgroundColor: '#fff',
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: '#D9DCE3',
+  },
+  imageButton: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 8,
+  },
+  imageButtonIcon: {
+    width: 24,
+    height: 24,
   },
   input: {
     flex: 1,
@@ -524,18 +740,44 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#667085',
   },
+  imagePreviewContainer: {
+    position: 'relative',
+    marginHorizontal: 12,
+    marginBottom: 8,
+    alignSelf: 'flex-start',
+  },
+  imagePreview: {
+    width: 100,
+    height: 100,
+    borderRadius: 8,
+  },
+  removeImageButton: {
+    position: 'absolute',
+    top: -8,
+    right: -8,
+    backgroundColor: '#FF6B6B',
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1,
+  },
+  removeImageText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
   warningContainer: {
-    backgroundColor: '#FFF4E6',
+    backgroundColor: '#1F2937',
     paddingHorizontal: 16,
     paddingVertical: 12,
     marginBottom: 16,
     borderRadius: 8,
-    borderLeftWidth: 4,
-    borderLeftColor: '#FF9800',
   },
   warningText: {
     fontSize: 12,
-    color: '#E65100',
+    color: '#FFFFFF',
     lineHeight: 18,
     textAlign: 'center',
     fontWeight: '500',

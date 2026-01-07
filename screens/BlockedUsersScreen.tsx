@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -37,6 +37,13 @@ export default function BlockedUsersScreen() {
   const navigation = useNavigation<NavigationProp>();
   const { blockedUsers, unblockUser, contacts } = useChat();
   
+  // contacts를 Map으로 변환하여 O(1) 조회 최적화
+  const contactsMap = useMemo(() => {
+    const map = new Map<string, User>();
+    contacts.forEach((contact) => map.set(contact.id, contact));
+    return map;
+  }, [contacts]);
+  
   // 성능 측정: 화면 포커스 시
   useFocusEffect(
     React.useCallback(() => {
@@ -69,7 +76,7 @@ export default function BlockedUsersScreen() {
         const notFoundIds: string[] = [];
 
         blockedUserIds.forEach((userId) => {
-          const user = contacts.find((c) => c.id === userId);
+          const user = contactsMap.get(userId);
           if (user) {
             foundInContacts.push({
               ...user,
@@ -230,7 +237,7 @@ const styles = StyleSheet.create({
     paddingTop: 50,
     paddingHorizontal: 20,
     paddingBottom: 16,
-    backgroundColor: '#1F2937',
+    backgroundColor: '#fff',
   },
   backButton: {
     width: 40,
@@ -240,13 +247,13 @@ const styles = StyleSheet.create({
   },
   backButtonText: {
     fontSize: 28,
-    color: '#fff',
+    color: '#111',
     fontWeight: '300',
   },
   headerTitle: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#fff',
+    color: '#111',
   },
   loadingContainer: {
     flex: 1,

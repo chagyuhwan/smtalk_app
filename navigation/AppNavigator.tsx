@@ -1,4 +1,4 @@
-import React, { useCallback, useState, useEffect, useRef } from 'react';
+import React, { useCallback, useState, useEffect, useRef, useMemo } from 'react';
 import { NavigationContainer, NavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -15,16 +15,22 @@ import CustomerServiceScreen from '../screens/CustomerServiceScreen';
 import TermsOfServiceScreen from '../screens/TermsOfServiceScreen';
 import PrivacyPolicyScreen from '../screens/PrivacyPolicyScreen';
 import NotificationSettingsScreen from '../screens/NotificationSettingsScreen';
-import NotificationTestScreen from '../screens/NotificationTestScreen';
 import PhoneAuthScreen from '../screens/PhoneAuthScreen';
 import { RootStackParamList, MainTabParamList } from './types';
-import { Text, View, StyleSheet, ActivityIndicator, Image } from 'react-native';
+import { Text, View, StyleSheet, ActivityIndicator, Image, Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useChat } from '../context/ChatContext';
 import { auth } from '../config/firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { notificationService } from '../services/NotificationService';
 import * as Notifications from 'expo-notifications';
+import * as SplashScreen from 'expo-splash-screen';
 import { performanceMonitor } from '../utils/PerformanceMonitor';
+
+// 네이티브 스플래시 스크린을 즉시 숨기기
+SplashScreen.hideAsync().catch(() => {
+  // 네이티브 스플래시가 없어도 계속 진행
+});
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
@@ -60,17 +66,26 @@ function UsersIcon({ color, focused }: { color: string; focused: boolean }) {
 }
 
 // 메시지 아이콘 컴포넌트 (PNG 이미지 사용)
-function MessageIcon({ color, focused }: { color: string; focused: boolean }) {
+function MessageIcon({ color, focused, unreadCount }: { color: string; focused: boolean; unreadCount: number }) {
   return (
-    <Image
-      source={require('../assets/messages.png')}
-      style={[
-        iconStyles.image,
-        // 항상 색상 적용 (비활성일 때는 더 진하게)
-        { tintColor: color, opacity: focused ? 1 : 0.9 },
-      ]}
-      resizeMode="contain"
-    />
+    <View style={iconStyles.iconContainer}>
+      <Image
+        source={require('../assets/messages.png')}
+        style={[
+          iconStyles.image,
+          // 항상 색상 적용 (비활성일 때는 더 진하게)
+          { tintColor: color, opacity: focused ? 1 : 0.9 },
+        ]}
+        resizeMode="contain"
+      />
+      {unreadCount > 0 && (
+        <View style={iconStyles.badge}>
+          <Text style={iconStyles.badgeText}>
+            {unreadCount > 99 ? '99+' : unreadCount}
+          </Text>
+        </View>
+      )}
+    </View>
   );
 }
 
@@ -90,9 +105,34 @@ function ProfileIcon({ color, focused }: { color: string; focused: boolean }) {
 }
 
 const iconStyles = StyleSheet.create({
+  iconContainer: {
+    position: 'relative',
+    width: 32,
+    height: 32,
+  },
   image: {
     width: 32,
     height: 32,
+  },
+  badge: {
+    position: 'absolute',
+    top: -4,
+    right: -6,
+    backgroundColor: '#DC2626',
+    borderRadius: 10,
+    minWidth: 20,
+    height: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
+  badgeText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '700',
+    textAlign: 'center',
   },
 });
 
@@ -121,8 +161,8 @@ const tabNavigatorOptions = {
     borderTopWidth: 1,
     borderTopColor: '#E5E7EB',
     paddingTop: 8,
-    paddingBottom: 4,
-    height: 60,
+    paddingBottom: Platform.OS === 'ios' ? 8 : 8, // 하단 패딩 조정
+    height: Platform.OS === 'ios' ? 65 : 60, // 높이 조정하여 위로 올림
   },
   tabBarLabelStyle: {
     fontSize: 12,
@@ -131,8 +171,28 @@ const tabNavigatorOptions = {
 };
 
 function MainTabs() {
+  const { chatRooms } = useChat();
+  const insets = useSafeAreaInsets();
+  
+  // 전체 읽지 않은 메시지 수 계산
+  const totalUnreadCount = useMemo(() => {
+    return chatRooms.reduce((total, room) => {
+      return total + (room.unreadCount || 0);
+    }, 0);
+  }, [chatRooms]);
+  
+  // Safe area를 고려한 탭 바 스타일 (위로 올리기 위해 paddingBottom 최소화)
+  const tabBarStyleWithInsets = {
+    ...tabNavigatorOptions.tabBarStyle,
+    paddingBottom: Platform.OS === 'ios' ? Math.max(insets.bottom - 10, 4) : 4, // iOS safe area에서 10px 빼서 위로 올림
+    height: Platform.OS === 'ios' ? 50 + Math.max(insets.bottom - 10, 0) : 55, // 높이도 줄여서 위로 올림
+  };
+  
   return (
-    <Tab.Navigator screenOptions={tabNavigatorOptions}>
+    <Tab.Navigator screenOptions={{
+      ...tabNavigatorOptions,
+      tabBarStyle: tabBarStyleWithInsets,
+    }}>
       <Tab.Screen
         name="StarTalk"
         component={StarTalkScreen}
@@ -154,7 +214,7 @@ function MainTabs() {
         component={ChatListScreen}
         options={{
           tabBarLabel: '',
-          tabBarIcon: ({ color, focused }) => <MessageIcon color={color} focused={focused} />,
+          tabBarIcon: ({ color, focused }) => <MessageIcon color={color} focused={focused} unreadCount={totalUnreadCount} />,
         }}
       />
       <Tab.Screen
@@ -183,6 +243,8 @@ export default function AppNavigator() {
   const [isLoading, setIsLoading] = useState(true);
   const navigationRef = useRef<NavigationContainerRef<RootStackParamList>>(null);
   const prevAuthState = useRef<boolean | null>(null);
+  const splashStartTime = useRef<number>(Date.now());
+  const authReady = useRef<boolean>(false);
   const { contacts, chatRooms, getChatPartner } = useChat();
 
   // 앱 시작 시 인증 상태 확인
@@ -204,7 +266,19 @@ export default function AppNavigator() {
       
       prevAuthState.current = authenticated;
       setIsAuthenticated(authenticated);
-      setIsLoading(false);
+      authReady.current = true;
+      
+      // 스플래시 화면 최소 표시 시간 보장 (2초)
+      const elapsedTime = Date.now() - splashStartTime.current;
+      const minSplashTime = 2000; // 2초
+      
+      if (elapsedTime < minSplashTime) {
+        setTimeout(() => {
+          setIsLoading(false);
+        }, minSplashTime - elapsedTime);
+      } else {
+        setIsLoading(false);
+      }
     });
 
     return () => unsubscribe();
@@ -279,15 +353,20 @@ export default function AppNavigator() {
   const chatScreenOptions = useCallback(
     ({ route }: { route: { params: RootStackParamList['Chat'] } }) => ({
       ...commonStackOptions,
-      headerTitle: () => <ChatHeader partner={route.params.partner} />,
+      headerShown: false,
     }),
     []
   );
 
   if (isLoading) {
     return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-        <ActivityIndicator size="large" color="#1F2937" />
+      <View style={{ flex: 1, backgroundColor: '#1f2937' }}>
+        {/* GIF 스플래시 스크린 - 화면 전체 */}
+        <Image
+          source={require('../assets/sflash_ico.gif')}
+          style={{ width: '100%', height: '100%' }}
+          resizeMode="cover"
+        />
       </View>
     );
   }
@@ -323,7 +402,7 @@ export default function AppNavigator() {
           name="ProfileSettings"
           component={ProfileSettingsScreen}
           options={{
-            title: '프로필 설정',
+            headerShown: false,
           }}
         />
         <Stack.Screen
@@ -337,7 +416,7 @@ export default function AppNavigator() {
           name="Charge"
           component={ChargeScreen}
           options={{
-            title: '포인트 충전',
+            headerShown: false,
           }}
         />
         <Stack.Screen
@@ -377,14 +456,6 @@ export default function AppNavigator() {
           component={NotificationSettingsScreen}
           options={{
             title: '알림 설정',
-            headerShown: false,
-          }}
-        />
-        <Stack.Screen
-          name="NotificationTest"
-          component={NotificationTestScreen}
-          options={{
-            title: '알림 테스트',
             headerShown: false,
           }}
         />

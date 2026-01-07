@@ -17,37 +17,14 @@ import { RootStackParamList } from '../navigation/types';
 import { ChatRoom } from '../types';
 import { firebaseFirestoreService } from '../services/FirebaseFirestoreService';
 import { performanceMonitor } from '../utils/PerformanceMonitor';
+import { formatRelativeTime } from '../utils/time';
+import { getAvatarColor } from '../utils/avatar';
 
-const SWIPE_THRESHOLD = 80;
-
-const AVATAR_COLORS = ['#FF6B6B', '#4ECDC4', '#1F2937', '#FFD93D', '#1F2937'];
-
-const getAvatarColor = (gender?: string, hasAvatar?: boolean) => {
-  // 프로필 사진이 없을 때 성별에 따라 색상 설정
-  if (!hasAvatar && gender) {
-    return gender === 'female' ? '#F3AAC2' : '#8FB5DF'; // 여자는 핑크, 남자는 연한 파란색
-  }
-  // 프로필 사진이 있거나 성별 정보가 없을 때는 기본 색상
-  return AVATAR_COLORS[0];
-};
+const SWIPE_THRESHOLD = 30;
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
-// 시간 포맷팅 함수를 컴포넌트 외부로 이동하여 재생성 방지
-const formatTime = (timestamp?: number): string => {
-  if (!timestamp) return '';
-  const diff = Date.now() - timestamp;
-  const minute = 60 * 1000;
-  const hour = 60 * minute;
-  const day = 24 * hour;
-
-  if (diff < minute) return '방금 전';
-  if (diff < hour) return `${Math.floor(diff / minute)}분 전`;
-  if (diff < day) return `${Math.floor(diff / hour)}시간 전`;
-
-  const date = new Date(timestamp);
-  return `${date.getMonth() + 1}/${date.getDate()}`;
-};
+const formatTime = formatRelativeTime;
 
 export default function ChatListScreen() {
   const navigation = useNavigation<NavigationProp>();
@@ -65,12 +42,16 @@ export default function ChatListScreen() {
   
   const [swipedRoomId, setSwipedRoomId] = useState<string | null>(null);
   const [swipeDirection, setSwipeDirection] = useState<'left' | 'right' | null>(null);
+  const [isSwiping, setIsSwiping] = useState(false); // 스와이프 중인지 추적
 
   const sortedRooms = useMemo(() => {
-    // 중복 제거: 같은 ID를 가진 채팅방이 여러 개 있으면 첫 번째만 유지
-    const uniqueRooms = chatRooms.filter((room, index, self) =>
-      index === self.findIndex((r) => r.id === room.id)
-    );
+    // 중복 제거: Set을 사용하여 O(n) 시간복잡도로 최적화
+    const seen = new Set<string>();
+    const uniqueRooms = chatRooms.filter((room) => {
+      if (seen.has(room.id)) return false;
+      seen.add(room.id);
+      return true;
+    });
     
     // 고정된 대화와 일반 대화를 분리
     const pinnedRooms: ChatRoom[] = [];
@@ -229,10 +210,18 @@ export default function ChatListScreen() {
 
     const panResponder = useRef(
       PanResponder.create({
-        onMoveShouldSetPanResponder: (_, gestureState) => {
-          return Math.abs(gestureState.dx) > 10;
+        onStartShouldSetPanResponder: (evt, gestureState) => {
+          // 수평 스와이프가 수직 스크롤보다 크면 스와이프로 인식
+          return Math.abs(gestureState.dx) > Math.abs(gestureState.dy) && Math.abs(gestureState.dx) > 5;
         },
+        onMoveShouldSetPanResponder: (_, gestureState) => {
+          // 수평 스와이프가 수직 스크롤보다 크면 스와이프로 인식
+          return Math.abs(gestureState.dx) > Math.abs(gestureState.dy) && Math.abs(gestureState.dx) > 10;
+        },
+        onPanResponderTerminationRequest: () => false, // 다른 제스처가 스와이프를 중단하지 않도록
         onPanResponderGrant: () => {
+          // 스와이프 시작 시 스크롤 비활성화
+          setIsSwiping(true);
           // 다른 채팅방이 스와이프되어 있으면 닫기
           if (swipedRoomId && swipedRoomId !== item.id) {
             setSwipedRoomId(null);
@@ -240,38 +229,86 @@ export default function ChatListScreen() {
           }
         },
         onPanResponderMove: (_, gestureState) => {
-          if (gestureState.dx < 0) {
-            // 왼쪽으로 스와이프 (삭제 버튼 표시)
-            const maxSwipe = -80;
-            translateX.setValue(Math.max(gestureState.dx, maxSwipe));
-          } else if (gestureState.dx > 0) {
-            // 오른쪽으로 스와이프 (고정 버튼 표시)
-            const maxSwipe = 80;
-            translateX.setValue(Math.min(gestureState.dx, maxSwipe));
+          // 수평 스와이프만 처리
+          if (Math.abs(gestureState.dx) > Math.abs(gestureState.dy)) {
+            if (gestureState.dx < 0) {
+              // 왼쪽으로 스와이프 (삭제 버튼 표시)
+              const maxSwipe = -80;
+              translateX.setValue(Math.max(gestureState.dx, maxSwipe));
+            } else if (gestureState.dx > 0) {
+              // 오른쪽으로 스와이프 (고정 버튼 표시)
+              const maxSwipe = 80;
+              translateX.setValue(Math.min(gestureState.dx, maxSwipe));
+            }
           }
         },
         onPanResponderRelease: (_, gestureState) => {
-          if (gestureState.dx < -SWIPE_THRESHOLD) {
-            // 왼쪽으로 스와이프 (삭제 버튼 표시)
-            Animated.spring(translateX, {
-              toValue: -80,
-              useNativeDriver: true,
-            }).start();
-            setSwipedRoomId(item.id);
-            setSwipeDirection('left');
-          } else if (gestureState.dx > SWIPE_THRESHOLD) {
-            // 오른쪽으로 스와이프 (고정 버튼 표시)
-            Animated.spring(translateX, {
-              toValue: 80,
-              useNativeDriver: true,
-            }).start();
-            setSwipedRoomId(item.id);
-            setSwipeDirection('right');
+          // 스와이프 종료 시 스크롤 다시 활성화
+          setIsSwiping(false);
+          // 수평 스와이프가 수직 스크롤보다 클 때만 처리
+          if (Math.abs(gestureState.dx) > Math.abs(gestureState.dy)) {
+            // 현재 스와이프 거리의 절반 이상이면 유지
+            const currentTranslateX = gestureState.dx;
+            if (currentTranslateX < -40) {
+              // 왼쪽으로 스와이프 (삭제 버튼 표시) - 절반 이상 스와이프하면 유지
+              Animated.spring(translateX, {
+                toValue: -80,
+                useNativeDriver: true,
+                tension: 100,
+                friction: 8,
+              }).start();
+              setSwipedRoomId(item.id);
+              setSwipeDirection('left');
+            } else if (currentTranslateX > 40) {
+              // 오른쪽으로 스와이프 (고정 버튼 표시) - 절반 이상 스와이프하면 유지
+              Animated.spring(translateX, {
+                toValue: 80,
+                useNativeDriver: true,
+                tension: 100,
+                friction: 8,
+              }).start();
+              setSwipedRoomId(item.id);
+              setSwipeDirection('right');
+            } else if (currentTranslateX < -SWIPE_THRESHOLD) {
+              // 임계값 이상 스와이프했지만 절반 미만이면 유지
+              Animated.spring(translateX, {
+                toValue: -80,
+                useNativeDriver: true,
+                tension: 100,
+                friction: 8,
+              }).start();
+              setSwipedRoomId(item.id);
+              setSwipeDirection('left');
+            } else if (currentTranslateX > SWIPE_THRESHOLD) {
+              // 임계값 이상 스와이프했지만 절반 미만이면 유지
+              Animated.spring(translateX, {
+                toValue: 80,
+                useNativeDriver: true,
+                tension: 100,
+                friction: 8,
+              }).start();
+              setSwipedRoomId(item.id);
+              setSwipeDirection('right');
+            } else {
+              // 원래 위치로 복귀
+              Animated.spring(translateX, {
+                toValue: 0,
+                useNativeDriver: true,
+                tension: 100,
+                friction: 8,
+              }).start();
+              if (swipedRoomId === item.id) {
+                setSwipedRoomId(null);
+                setSwipeDirection(null);
+              }
+            }
           } else {
-            // 원래 위치로 복귀
+            // 수직 스크롤이 더 크면 원래 위치로 복귀
             Animated.spring(translateX, {
               toValue: 0,
               useNativeDriver: true,
+              tension: 100,
+              friction: 8,
             }).start();
             if (swipedRoomId === item.id) {
               setSwipedRoomId(null);
@@ -312,40 +349,73 @@ export default function ChatListScreen() {
     const showDeleteButton = isSwiped && swipeDirection === 'left';
     const showPinButton = isSwiped && swipeDirection === 'right';
 
+    // translateX 값을 기반으로 버튼 표시 여부 결정 (스와이프 중간에도 보이도록)
+    const deleteButtonOpacity = translateX.interpolate({
+      inputRange: [-80, -40, 0],
+      outputRange: [1, 0.5, 0],
+      extrapolate: 'clamp',
+    });
+
+    const pinButtonOpacity = translateX.interpolate({
+      inputRange: [0, 40, 80],
+      outputRange: [0, 0.5, 1],
+      extrapolate: 'clamp',
+    });
+
     return (
       <View style={styles.swipeContainer}>
         {/* 왼쪽 고정 버튼 */}
-        {showPinButton && (
-          <View style={styles.pinButtonContainer}>
-            <TouchableOpacity
-              style={styles.pinButton}
-              onPress={handlePinPress}
-              activeOpacity={0.8}
-            >
-              <Image
-                source={require('../assets/pinicon.png')}
-                style={styles.pinButtonIcon}
-                resizeMode="contain"
-              />
-            </TouchableOpacity>
-          </View>
-        )}
+        <Animated.View
+          style={[
+            styles.pinButtonContainer,
+            {
+              opacity: pinButtonOpacity,
+              pointerEvents: showPinButton ? 'auto' : 'none',
+            },
+          ]}
+        >
+          <TouchableOpacity
+            style={styles.pinButton}
+            onPress={handlePinPress}
+            activeOpacity={0.8}
+            disabled={!showPinButton}
+          >
+            <Image
+              source={require('../assets/pinicon.png')}
+              style={styles.pinButtonIcon}
+              resizeMode="contain"
+              onError={(error) => {
+                console.warn('고정 아이콘 로드 실패:', error);
+              }}
+            />
+          </TouchableOpacity>
+        </Animated.View>
         {/* 오른쪽 삭제 버튼 */}
-        {showDeleteButton && (
-          <View style={styles.deleteButtonContainer}>
-            <TouchableOpacity
-              style={styles.deleteButton}
-              onPress={handleDeletePress}
-              activeOpacity={0.8}
-            >
-              <Image
-                source={require('../assets/deleteicon.png')}
-                style={styles.deleteButtonIcon}
-                resizeMode="contain"
-              />
-            </TouchableOpacity>
-          </View>
-        )}
+        <Animated.View
+          style={[
+            styles.deleteButtonContainer,
+            {
+              opacity: deleteButtonOpacity,
+              pointerEvents: showDeleteButton ? 'auto' : 'none',
+            },
+          ]}
+        >
+          <TouchableOpacity
+            style={styles.deleteButton}
+            onPress={handleDeletePress}
+            activeOpacity={0.8}
+            disabled={!showDeleteButton}
+          >
+            <Image
+              source={require('../assets/deleteicon.png')}
+              style={styles.deleteButtonIcon}
+              resizeMode="contain"
+              onError={(error) => {
+                console.warn('삭제 아이콘 로드 실패:', error);
+              }}
+            />
+          </TouchableOpacity>
+        </Animated.View>
         <Animated.View
           style={[
             styles.roomCard,
@@ -399,23 +469,32 @@ export default function ChatListScreen() {
                     />
                   )}
                   <Text style={styles.partnerName}>{partner.name}</Text>
+                  {(partner.age || partner.gender) && (
+                    <Text style={styles.partnerInfo}>
+                      {partner.age ? `${partner.age}세` : ''}
+                      {partner.age && partner.gender ? ' ' : ''}
+                      {partner.gender === 'male' ? '남' : partner.gender === 'female' ? '여' : ''}
+                    </Text>
+                  )}
                 </View>
                 <Text style={styles.timestamp}>{formatTime(item.lastMessage?.timestamp)}</Text>
               </View>
-              <Text style={styles.preview} numberOfLines={1}>
-                {item.lastMessage?.text ?? '새로운 대화를 시작해보세요!'}
-              </Text>
-            </View>
-            {item.unreadCount > 0 && (
-              <View style={styles.badge}>
-                <Text style={styles.badgeText}>{item.unreadCount}</Text>
+              <View style={styles.previewRow}>
+                <Text style={styles.preview} numberOfLines={1}>
+                  {item.lastMessage?.text ?? '새로운 대화를 시작해보세요!'}
+                </Text>
+                {item.unreadCount > 0 && (
+                  <View style={styles.badge}>
+                    <Text style={styles.badgeText}>{item.unreadCount}</Text>
+                  </View>
+                )}
               </View>
-            )}
+            </View>
           </TouchableOpacity>
         </Animated.View>
       </View>
     );
-  }, [getChatPartner, navigation, currentUser, swipedRoomId, swipeDirection, handleDeleteRoom, isPinned, handlePinToggle]);
+  }, [getChatPartner, navigation, currentUser, swipedRoomId, swipeDirection, handleDeleteRoom, isPinned, handlePinToggle, setIsSwiping]);
 
   const renderRoom = useCallback(({ item }: { item: ChatRoom }) => {
     return <SwipeableRoom item={item} />;
@@ -435,8 +514,8 @@ export default function ChatListScreen() {
         </TouchableOpacity>
       )}
       <View style={styles.header}>
-        <Text style={styles.greeting}>안녕하세요, {currentUser.name}님</Text>
-        <Text style={styles.subtitle}>메시지를 확인해보세요.</Text>
+        <Text style={styles.greeting}>메시지</Text>
+        <Text style={styles.subtitle}>대화를 이어가보세요</Text>
       </View>
 
       <TouchableOpacity
@@ -458,12 +537,20 @@ export default function ChatListScreen() {
           ListEmptyComponent={
             <View style={styles.emptyState}>
               <Text style={styles.emptyTitle}>아직 대화가 없어요</Text>
-              <Text style={styles.emptyDesc}>별톡에서 게시글을 보고 채팅을 시작해보세요.</Text>
+              <Text style={styles.emptyDesc}>에쎔톡에서 게시글을 보고 채팅을 시작해보세요.</Text>
             </View>
           }
-          removeClippedSubviews={true}
+          removeClippedSubviews={false}
           maxToRenderPerBatch={10}
           windowSize={10}
+          scrollEnabled={!swipedRoomId && !isSwiping}
+          onScrollBeginDrag={() => {
+            // 스크롤 시작 시 스와이프된 채팅방 닫기
+            if (swipedRoomId) {
+              setSwipedRoomId(null);
+              setSwipeDirection(null);
+            }
+          }}
         />
       </TouchableOpacity>
     </View>
@@ -487,6 +574,7 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: '700',
     color: '#fff',
+    marginBottom: 6,
   },
   deleteAllButton: {
     position: 'absolute',
@@ -518,6 +606,7 @@ const styles = StyleSheet.create({
     bottom: 0,
     justifyContent: 'center',
     zIndex: 0,
+    width: 80,
   },
   pinButton: {
     justifyContent: 'center',
@@ -618,13 +707,26 @@ const styles = StyleSheet.create({
     color: '#111',
     marginRight: 6,
   },
+  partnerInfo: {
+    fontSize: 13,
+    fontWeight: '400',
+    color: '#888',
+    marginLeft: 4,
+  },
   timestamp: {
     fontSize: 12,
     color: '#888',
   },
+  previewRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
   preview: {
     fontSize: 14,
     color: '#555',
+    flex: 1,
+    marginRight: 8,
   },
   badge: {
     minWidth: 22,

@@ -26,7 +26,7 @@ const PRODUCT_IDS = {
     'com.randomchat.points.3000',
     'com.randomchat.points.5000',
     'com.randomchat.points.10000',
-    'com.randomchat.points.20000',
+    'com.randomchat.points.30000',
     'com.randomchat.points.50000',
   ],
   // Google Play Console에서 생성한 상품 ID
@@ -35,7 +35,7 @@ const PRODUCT_IDS = {
     'com.randomchat.points.3000',
     'com.randomchat.points.5000',
     'com.randomchat.points.10000',
-    'com.randomchat.points.20000',
+    'com.randomchat.points.30000',
     'com.randomchat.points.50000',
   ],
 };
@@ -46,7 +46,7 @@ export const POINT_PRODUCT_MAP: Record<number, string> = {
   3000: Platform.OS === 'ios' ? PRODUCT_IDS.ios[1] : PRODUCT_IDS.android[1],
   5000: Platform.OS === 'ios' ? PRODUCT_IDS.ios[2] : PRODUCT_IDS.android[2],
   10000: Platform.OS === 'ios' ? PRODUCT_IDS.ios[3] : PRODUCT_IDS.android[3],
-  20000: Platform.OS === 'ios' ? PRODUCT_IDS.ios[4] : PRODUCT_IDS.android[4],
+  30000: Platform.OS === 'ios' ? PRODUCT_IDS.ios[4] : PRODUCT_IDS.android[4],
   50000: Platform.OS === 'ios' ? PRODUCT_IDS.ios[5] : PRODUCT_IDS.android[5],
 };
 

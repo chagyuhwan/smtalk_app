@@ -1,21 +1,24 @@
 {
   "expo": {
-    "name": "random_chat",
-    "slug": "random_chat",
+    "name": "smtalk",
+    "slug": "smtalk",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/appicon2.png",
     "userInterfaceStyle": "light",
     "splash": {
-      "image": "./assets/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#1f2937"
+    },
+    "autolinking": {
+      "exclude": [
+        "expo-firebase-core"
+      ]
     },
     "plugins": [
       [
         "expo-notifications",
         {
-          "icon": "./assets/icon.png",
+          "icon": "./assets/appicon2.png",
           "color": "#ffffff",
           "sounds": []
         }
@@ -36,7 +39,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
+        "foregroundImage": "./assets/appicon2.png",
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
@@ -49,10 +52,15 @@
       ],
       "package": "com.kanc.randomchat",
       "versionCode": 1,
-      "googleServicesFile": "./GoogleService-Info.plist"
+      "googleServicesFile": "./google-services.json"
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "c84661b3-d0f1-4bf1-a591-2b27eb4c6f5c"
+      }
     }
   }
 }

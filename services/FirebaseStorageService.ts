@@ -18,6 +18,7 @@ class FirebaseStorageService {
   private readonly PATHS = {
     AVATARS: 'avatars',
     POSTS: 'posts',
+    MESSAGES: 'messages',
   };
 
   /**
@@ -105,6 +106,69 @@ class FirebaseStorageService {
   }
 
   /**
+   * 프로필 이미지 업로드 (인덱스 포함)
+   */
+  async uploadProfileImage(userId: string, imageUri: string, index: number): Promise<string> {
+    try {
+      const blob = await this.uriToBlob(imageUri);
+      
+      // MIME 타입에 따라 확장자 결정
+      const extension = blob.type?.includes('png') ? 'png' : 
+                       blob.type?.includes('gif') ? 'gif' :
+                       blob.type?.includes('webp') ? 'webp' : 'jpg';
+      
+      const fileName = `${userId}_${index}_${Date.now()}.${extension}`;
+      const storageRef = ref(storage, `${this.PATHS.AVATARS}/${userId}/${fileName}`);
+
+      await uploadBytes(storageRef, blob, {
+        contentType: blob.type || 'image/jpeg',
+      });
+
+      const downloadURL = await getDownloadURL(storageRef);
+      return downloadURL;
+    } catch (error) {
+      console.error(`프로필 이미지 업로드 오류 [${index}]:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * 여러 프로필 이미지 업로드
+   */
+  async uploadMultipleProfileImages(userId: string, imageUris: string[]): Promise<string[]> {
+    try {
+      console.log('여러 프로필 이미지 업로드 시작:', imageUris.length, '개');
+      
+      if (!imageUris || imageUris.length === 0) {
+        throw new Error('업로드할 이미지가 없습니다.');
+      }
+
+      if (imageUris.length > 3) {
+        throw new Error('프로필 이미지는 최대 3장까지 업로드할 수 있습니다.');
+      }
+
+      // 순차적으로 업로드 (동시 업로드 시 메모리 부족 방지)
+      const uploadResults: string[] = [];
+      for (let i = 0; i < imageUris.length; i++) {
+        try {
+          const url = await this.uploadProfileImage(userId, imageUris[i], i);
+          uploadResults.push(url);
+          console.log(`프로필 이미지 ${i + 1}/${imageUris.length} 업로드 완료`);
+        } catch (error: any) {
+          console.error(`프로필 이미지 ${i + 1} 업로드 실패:`, error);
+          throw error;
+        }
+      }
+
+      console.log('모든 프로필 이미지 업로드 완료:', uploadResults.length, '개');
+      return uploadResults;
+    } catch (error: any) {
+      console.error('여러 프로필 이미지 업로드 오류:', error);
+      throw error;
+    }
+  }
+
+  /**
    * 게시글 이미지 업로드
    */
   async uploadPostImage(postId: string, imageUri: string, index: number): Promise<string> {
@@ -180,6 +244,140 @@ class FirebaseStorageService {
       return uploadResults;
     } catch (error: any) {
       console.error('여러 이미지 업로드 오류:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 메시지 이미지 업로드
+   */
+  async uploadMessageImage(
+    chatRoomId: string,
+    messageId: string,
+    imageUri: string,
+    index: number
+  ): Promise<string> {
+    try {
+      console.log('메시지 이미지 업로드 시작:', { chatRoomId, messageId, index });
+      
+      const blob = await this.uriToBlob(imageUri);
+      const fileName = `message_${messageId}_${index}_${Date.now()}.jpg`;
+      const storagePath = `${this.PATHS.MESSAGES}/${chatRoomId}/${fileName}`;
+      const storageRef = ref(storage, storagePath);
+      
+      console.log('스토리지 경로:', storagePath);
+      
+      const uploadResult: UploadResult = await uploadBytes(storageRef, blob);
+      console.log('업로드 완료:', uploadResult.metadata.fullPath);
+      
+      const downloadURL = await getDownloadURL(uploadResult.ref);
+      console.log('다운로드 URL:', downloadURL);
+      
+      return downloadURL;
+    } catch (error: any) {
+      console.error('메시지 이미지 업로드 오류:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 여러 메시지 이미지 업로드
+   */
+  async uploadMultipleMessageImages(
+    chatRoomId: string,
+    messageId: string,
+    imageUris: string[]
+  ): Promise<string[]> {
+    try {
+      console.log('여러 메시지 이미지 업로드 시작:', imageUris.length, '개');
+      
+      if (!imageUris || imageUris.length === 0) {
+        throw new Error('업로드할 이미지가 없습니다.');
+      }
+      
+      const uploadResults: string[] = [];
+      for (let i = 0; i < imageUris.length; i++) {
+        try {
+          const url = await this.uploadMessageImage(chatRoomId, messageId, imageUris[i], i);
+          uploadResults.push(url);
+          console.log(`메시지 이미지 ${i + 1}/${imageUris.length} 업로드 완료`);
+        } catch (error: any) {
+          console.error(`메시지 이미지 ${i + 1} 업로드 실패:`, error);
+          throw error;
+        }
+      }
+      
+      console.log('모든 메시지 이미지 업로드 완료:', uploadResults.length, '개');
+      return uploadResults;
+    } catch (error: any) {
+      console.error('여러 메시지 이미지 업로드 오류:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 메시지 이미지 업로드
+   */
+  async uploadMessageImage(
+    chatRoomId: string,
+    messageId: string,
+    imageUri: string,
+    index: number
+  ): Promise<string> {
+    try {
+      console.log('메시지 이미지 업로드 시작:', { chatRoomId, messageId, index });
+      
+      const blob = await this.uriToBlob(imageUri);
+      const fileName = `message_${messageId}_${index}_${Date.now()}.jpg`;
+      const storagePath = `${this.PATHS.MESSAGES}/${chatRoomId}/${fileName}`;
+      const storageRef = ref(storage, storagePath);
+      
+      console.log('스토리지 경로:', storagePath);
+      
+      const uploadResult: UploadResult = await uploadBytes(storageRef, blob);
+      console.log('업로드 완료:', uploadResult.metadata.fullPath);
+      
+      const downloadURL = await getDownloadURL(uploadResult.ref);
+      console.log('다운로드 URL:', downloadURL);
+      
+      return downloadURL;
+    } catch (error: any) {
+      console.error('메시지 이미지 업로드 오류:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 여러 메시지 이미지 업로드
+   */
+  async uploadMultipleMessageImages(
+    chatRoomId: string,
+    messageId: string,
+    imageUris: string[]
+  ): Promise<string[]> {
+    try {
+      console.log('여러 메시지 이미지 업로드 시작:', imageUris.length, '개');
+      
+      if (!imageUris || imageUris.length === 0) {
+        throw new Error('업로드할 이미지가 없습니다.');
+      }
+      
+      const uploadResults: string[] = [];
+      for (let i = 0; i < imageUris.length; i++) {
+        try {
+          const url = await this.uploadMessageImage(chatRoomId, messageId, imageUris[i], i);
+          uploadResults.push(url);
+          console.log(`메시지 이미지 ${i + 1}/${imageUris.length} 업로드 완료`);
+        } catch (error: any) {
+          console.error(`메시지 이미지 ${i + 1} 업로드 실패:`, error);
+          throw error;
+        }
+      }
+      
+      console.log('모든 메시지 이미지 업로드 완료:', uploadResults.length, '개');
+      return uploadResults;
+    } catch (error: any) {
+      console.error('여러 메시지 이미지 업로드 오류:', error);
       throw error;
     }
   }

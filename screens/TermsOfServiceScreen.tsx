@@ -33,196 +33,323 @@ export default function TermsOfServiceScreen() {
         showsVerticalScrollIndicator={true}
       >
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>① BDSM 랜덤채팅 서비스 운영방침</Text>
+          <Text style={styles.sectionTitle}>이용약관</Text>
           <Text style={styles.effectiveDate}>시행일자 : [시행일]</Text>
           
           <Text style={styles.paragraph}>
-            본 운영방침은 [회사명](이하 "회사")이 제공하는 [서비스명](이하 "서비스")의 이용 기준과 제재 원칙을 규정함을 목적으로 한다.
+            이 약관은 AEROC(이하 "회사")가 제공하는 성인용 포인트 기반 채팅 서비스 "에쎔톡"(이하 "서비스")의 이용과 관련하여, 회사와 회원 간의 권리·의무 및 책임 사항을 규정함을 목적으로 합니다.
           </Text>
+          
           <Text style={styles.paragraph}>
-            서비스 이용약관과 본 운영방침의 내용이 상충하는 경우에는 이용약관이 우선 적용된다.
+            본 서비스는 만 19세 이상의 성인만 이용할 수 있습니다.
           </Text>
 
-          <Text style={styles.articleTitle}>제1조(목적 및 기본 원칙)</Text>
+          <Text style={styles.subArticleTitle}>제1장 총칙</Text>
+
+          <Text style={styles.articleTitle}>제1조(목적)</Text>
           <Text style={styles.paragraph}>
-            ① 본 운영방침의 목적은 BDSM 성향을 가진 성인 이용자들이 상호 존중과 명시적 동의를 전제로 서비스를 안전하게 이용할 수 있도록 이용 기준을 정하는 데 있다.
+            이 약관은 회사가 제공하는 서비스의 이용 조건 및 절차, 회사와 회원의 권리·의무, 책임 사항, 기타 필요한 사항을 정하는 것을 목적으로 합니다.
           </Text>
+
+          <Text style={styles.articleTitle}>제2조(용어의 정의)</Text>
           <Text style={styles.paragraph}>
-            ② 서비스는 성인 간 자발적인 온라인 커뮤니케이션을 전제로 하며, 회사는 다음 각 호를 핵심 원칙으로 한다.
+            이 약관에서 사용하는 주요 용어의 뜻은 다음과 같습니다.
           </Text>
           <View style={styles.numberedList}>
-            <Text style={styles.numberedItem}>1. 미성년자의 서비스 접근 및 이용 차단</Text>
-            <Text style={styles.numberedItem}>2. 불법·범죄행위의 예방 및 차단</Text>
-            <Text style={styles.numberedItem}>3. 비동의·강제 상황의 미화·조장 행위 금지</Text>
+            <Text style={styles.numberedItem}>1. 서비스: 회사가 제공하는 에쎔톡 앱 및 이와 관련된 일체의 기능을 말합니다.</Text>
+            <Text style={styles.numberedItem}>2. 회원: 약관에 동의하고 서비스 이용을 위해 계정을 생성한 자를 말합니다.</Text>
+            <Text style={styles.numberedItem}>3. 비회원: 별도의 회원가입 없이 서비스의 일부만 이용하는 자(있을 경우)를 말합니다.</Text>
+            <Text style={styles.numberedItem}>4. 계정: 회원이 서비스에 접속하여 이용하기 위해 설정한 로그인 정보(휴대전화번호, 비밀번호 등)와 프로필 정보를 말합니다.</Text>
+            <Text style={styles.numberedItem}>5. 포인트: 회원이 결제를 통해 구매하거나 회사로부터 지급받아, 서비스 내 유료 기능(예: 채팅 발송 등)에 사용할 수 있는 전용 재화를 말합니다. 현금이나 다른 재화로 환전되지 않습니다.</Text>
+            <Text style={styles.numberedItem}>6. 게시글: 회원이 서비스 내 게시판 등에 작성·업로드하는 글, 이미지, 사진, 동영상, 기타 파일 등을 말합니다. (에쎔톡 게시글에는 댓글 기능이 제공되지 않습니다.)</Text>
+            <Text style={styles.numberedItem}>7. 채팅: 회원 간 1:1로 주고받는 메시지 및 이미지·파일 전송 기능을 말합니다.</Text>
+            <Text style={styles.numberedItem}>8. 이용자 콘텐츠: 게시글, 채팅 등 회원이 서비스에 올리거나 전송하는 모든 정보를 통칭합니다.</Text>
           </View>
           <Text style={styles.paragraph}>
-            ③ 이용자는 본 운영방침을 숙지하고 준수하여야 하며, 운영방침 위반 시 회사는 서비스 이용 제한, 계정 정지, 영구 이용제한, 수사기관 협조 등 필요한 조치를 취할 수 있다.
+            기타 본 약관에서 정의되지 않은 용어는 관계 법령 및 서비스 내 안내, 일반적인 관행에 따릅니다.
           </Text>
 
-          <Text style={styles.articleTitle}>제2조(이용 대상 및 연령 제한)</Text>
+          <Text style={styles.articleTitle}>제3조(약관의 게시 및 개정)</Text>
           <Text style={styles.paragraph}>
-            ① 서비스는 국내 관련 법령에 따른 성인(예: 만 18세 또는 19세 이상)만을 대상으로 제공되며, 미성년자의 가입 및 이용은 금지된다.
+            1. 회사는 이 약관의 내용을 회원이 쉽게 확인할 수 있도록 서비스 내 설정·정보 화면 또는 연결 화면에 게시합니다.
           </Text>
           <Text style={styles.paragraph}>
-            ② 회사는 다음 각 호의 방법을 포함하여 성인 여부를 확인할 수 있다.
+            2. 회사는 관련 법령을 위배하지 않는 범위에서 이 약관을 개정할 수 있습니다.
+          </Text>
+          <Text style={styles.paragraph}>
+            3. 회사가 약관을 개정하는 경우, 적용 일자와 개정 사유를 명시하여 개정 약관 시행 7일 전(회원에게 불리한 변경의 경우 30일 전)부터 서비스 내 공지사항 등을 통해 알립니다.
+          </Text>
+          <Text style={styles.paragraph}>
+            4. 회사가 개정 약관을 공지하면서 "개정 약관 시행일까지 거부 의사를 표시하지 않을 경우 동의한 것으로 본다"는 내용을 함께 고지하였음에도 회원이 명시적으로 거부 의사를 표시하지 않은 경우, 회원은 개정 약관에 동의한 것으로 봅니다.
+          </Text>
+          <Text style={styles.paragraph}>
+            5. 회원이 개정 약관에 동의하지 않는 경우, 회사 또는 회원은 이용계약을 해지할 수 있습니다.
+          </Text>
+
+          <Text style={styles.articleTitle}>제4조(약관 외 준칙)</Text>
+          <Text style={styles.paragraph}>
+            이 약관에서 정하지 않은 사항에 대해서는 관계 법령, 회사가 별도로 정한 개별 이용약관·운영정책·공지사항, 일반적인 상관례를 따릅니다.
+          </Text>
+
+          <Text style={styles.articleTitle}>제5조(개인정보 처리방침과의 관계)</Text>
+          <Text style={styles.paragraph}>
+            1. 회사는 서비스 제공을 위해 필요한 범위에서 회원의 개인정보를 수집·이용하며, 자세한 내용은 별도 공개하는 개인정보 처리방침에 따릅니다.
+          </Text>
+          <Text style={styles.paragraph}>
+            2. 개인정보 보호와 관련하여 이 약관과 개인정보 처리방침의 내용이 상충하는 경우, 개인정보 처리방침의 내용이 우선 적용됩니다.
+          </Text>
+
+          <Text style={styles.subArticleTitle}>제2장 이용계약 및 계정 관리</Text>
+
+          <Text style={styles.articleTitle}>제6조(회원가입 및 연령 제한)</Text>
+          <Text style={styles.paragraph}>
+            1. 서비스 이용을 희망하는 자는 회사가 정한 방법(앱 내 회원가입 화면 등)에 따라 약관에 동의하고, 필요한 정보를 입력하여 회원가입을 신청합니다.
+          </Text>
+          <Text style={styles.paragraph}>
+            2. 서비스는 만 19세 이상 성인만 이용할 수 있으며, 회사는 본인인증 결과 등을 통해 성인 여부를 확인할 수 있습니다.
+          </Text>
+          <Text style={styles.paragraph}>
+            3. 회사는 다음 각 호에 해당하는 경우 회원가입을 승낙하지 않거나, 사후에 이용계약을 해지할 수 있습니다.
           </Text>
           <View style={styles.numberedList}>
-            <Text style={styles.numberedItem}>1. 휴대폰 본인인증, 아이핀 등 성인 인증 수단</Text>
-            <Text style={styles.numberedItem}>2. 오픈마켓 및 플랫폼에서 제공하는 연령·성인 인증 시스템 연동</Text>
+            <Text style={styles.numberedItem}>1) 만 19세 미만인 경우</Text>
+            <Text style={styles.numberedItem}>2) 타인의 명의·전화번호 등 정보를 도용한 경우</Text>
+            <Text style={styles.numberedItem}>3) 허위 정보를 기재하거나 필수 정보를 기재하지 않은 경우</Text>
+            <Text style={styles.numberedItem}>4) 이전에 약관 위반 등으로 이용제한 또는 회원 자격을 상실한 이력이 있는 경우</Text>
+            <Text style={styles.numberedItem}>5) 기타 회사의 합리적인 판단으로 서비스 제공이 부적절하다고 인정되는 경우</Text>
           </View>
+
+          <Text style={styles.articleTitle}>제7조(회원 정보의 변경)</Text>
           <Text style={styles.paragraph}>
-            ③ 미성년자가 허위 정보로 가입하거나 서비스를 이용한 사실이 확인되는 경우, 회사는 다음 각 호의 조치를 취할 수 있다.
+            1. 회원은 서비스 내 프로필 설정 화면 등을 통하여 본인의 정보를 확인·수정할 수 있습니다.
+          </Text>
+          <Text style={styles.paragraph}>
+            2. 회원은 가입 시 기재한 정보에 변경이 발생한 경우, 지체 없이 서비스 내에서 수정하거나 회사에 문의하여 변경해야 합니다.
+          </Text>
+          <Text style={styles.paragraph}>
+            3. 회원이 정보를 수정하지 않거나 잘못된 정보를 제공하여 발생한 불이익에 대하여 회사는 책임을 지지 않습니다.
+          </Text>
+
+          <Text style={styles.articleTitle}>제8조(계정 및 비밀번호 관리)</Text>
+          <Text style={styles.paragraph}>
+            1. 계정의 관리 책임은 회원 본인에게 있으며, 제3자가 접근·이용하지 않도록 비밀번호 등을 적절히 관리해야 합니다.
+          </Text>
+          <Text style={styles.paragraph}>
+            2. 회원은 자신의 계정을 제3자에게 양도·대여·공유할 수 없습니다.
+          </Text>
+          <Text style={styles.paragraph}>
+            3. 회원은 계정 또는 비밀번호가 도용되었거나 제3자가 무단으로 이용하고 있음을 인지한 경우, 즉시 회사에 통지하고 안내에 따라야 합니다.
+          </Text>
+          <Text style={styles.paragraph}>
+            4. 회원이 제3항의 의무를 이행하지 않거나 회사의 안내에 따르지 않아 발생한 손해에 대하여 회사는 책임을 지지 않습니다.
+          </Text>
+
+          <Text style={styles.articleTitle}>제9조(회사의 통지)</Text>
+          <Text style={styles.paragraph}>
+            1. 회사는 회원에 대한 통지를 하는 경우, 서비스 내 알림, 팝업, 게시판 공지, 회원이 제공한 연락처(푸시 알림, 문자 등)를 통해 할 수 있습니다.
+          </Text>
+          <Text style={styles.paragraph}>
+            2. 회사는 불특정 다수 회원에 대한 통지의 경우, 서비스 내 공지사항에 7일 이상 게시함으로써 개별 통지에 갈음할 수 있습니다. 다만, 회원의 권리·의무에 중대한 영향을 미치는 사항은 가능한 한 개별 통지를 진행합니다.
+          </Text>
+
+          <Text style={styles.subArticleTitle}>제3장 서비스 이용</Text>
+
+          <Text style={styles.articleTitle}>제10조(서비스의 내용)</Text>
+          <Text style={styles.paragraph}>
+            1. 회사가 제공하는 서비스의 주요 내용은 다음과 같습니다.
           </Text>
           <View style={styles.numberedList}>
-            <Text style={styles.numberedItem}>1. 해당 계정의 즉시 영구 정지</Text>
-            <Text style={styles.numberedItem}>2. 관련 로그 및 기록 보관</Text>
-            <Text style={styles.numberedItem}>3. 필요 시 관계 법령에 따른 수사기관 통보 및 협조</Text>
+            <Text style={styles.numberedItem}>1) 회원 프로필 열람 기능</Text>
+            <Text style={styles.numberedItem}>2) 게시판에서의 게시글 작성 및 열람 기능 (에쎔톡 게시판에는 댓글 작성 기능이 제공되지 않습니다.)</Text>
+            <Text style={styles.numberedItem}>3) 포인트를 사용하여 특정 회원에게 1:1 채팅을 발송하고, 채팅을 수신·응답할 수 있는 기능</Text>
+            <Text style={styles.numberedItem}>4) 회원이 선택한 조건(성별, 연령대, 지역, 성적 선호·관심 성향 등)에 따른 회원 검색·필터링 기능</Text>
+            <Text style={styles.numberedItem}>5) 신고·차단 기능, 이용제한·제재 처리 등 커뮤니티 운영 기능</Text>
           </View>
-
-          <Text style={styles.articleTitle}>제3조(서비스 이용 원칙)</Text>
           <Text style={styles.paragraph}>
-            ① BDSM 관련 대화, 역할놀이 등은 어디까지나 당사자 간 명시적인 동의와 상호 존중을 전제로 한다.
+            2. 회사는 서비스 운영 및 품질 향상을 위하여, 필요한 범위 내에서 서비스의 내용을 변경·추가·종료할 수 있습니다. 이 경우 제3조에 따라 사전에 공지합니다.
+          </Text>
+
+          <Text style={styles.articleTitle}>제11조(서비스 이용 시간)</Text>
+          <Text style={styles.paragraph}>
+            1. 서비스는 원칙적으로 연중무휴, 1일 24시간 제공됩니다.
           </Text>
           <Text style={styles.paragraph}>
-            ② 이용자는 서비스 이용 시 다음 각 호의 사항을 준수하여야 한다.
+            2. 다음 각 호의 경우, 회사는 서비스 제공을 일시 중단할 수 있으며, 사전에 또는 사후에 공지할 수 있습니다.
           </Text>
           <View style={styles.numberedList}>
-            <Text style={styles.numberedItem}>1. 상대방이 거절 의사를 표시한 경우, 즉시 해당 행동·대화를 중단할 것</Text>
-            <Text style={styles.numberedItem}>2. 상대방에게 심리적·정신적 피해가 명백히 예상되는 표현을 반복적으로 사용하지 않을 것</Text>
-            <Text style={styles.numberedItem}>3. 현실에서의 위험한 행위(신체적 위해가 큰 행위 등)를 무책임하게 권유하거나 "해도 된다"고 단정적으로 표현하지 않을 것</Text>
+            <Text style={styles.numberedItem}>1) 서비스 설비의 유지·보수, 교체, 점검 등 필요한 작업을 수행하는 경우</Text>
+            <Text style={styles.numberedItem}>2) 전기·통신 장애, 서버 장애 등 회사가 통제하기 어려운 사유가 발생한 경우</Text>
+            <Text style={styles.numberedItem}>3) 기타 운영상 상당한 이유가 있는 경우</Text>
           </View>
+
+          <Text style={styles.articleTitle}>제12조(서비스의 변경 및 중단)</Text>
           <Text style={styles.paragraph}>
-            ③ 회사는 "BDSM 성향"을 이유로 한 상대방에 대한 인격 모독, 강요, 괴롭힘, 폭력적 태도를 정당화하지 않으며, 이러한 행위는 운영방침 위반으로 본다.
+            1. 회사는 상당한 이유가 있는 경우, 서비스의 전부 또는 일부를 변경하거나 종료할 수 있습니다.
+          </Text>
+          <Text style={styles.paragraph}>
+            2. 유료 서비스의 전부 또는 일부를 종료하는 경우, 회사는 관련 법령에 따라 회원에게 불이익이 최소화되도록 사전에 공지하고, 미사용 포인트 등에 대한 조치를 별도로 안내합니다.
           </Text>
 
-          <Text style={styles.articleTitle}>제4조(금지행위)</Text>
+          <Text style={styles.subArticleTitle}>제4장 포인트 및 유료 서비스</Text>
+
+          <Text style={styles.articleTitle}>제13조(포인트의 정의 및 성격)</Text>
           <Text style={styles.paragraph}>
-            ① 이용자는 서비스 이용과 관련하여 다음 각 호의 행위를 하여서는 아니 된다.
+            1. 포인트는 서비스 내에서만 사용할 수 있는 전용 유료 재화로, 회원이 결제를 통해 구매하거나 회사가 이벤트·보상 등의 형태로 무상 지급할 수 있습니다.
+          </Text>
+          <Text style={styles.paragraph}>
+            2. 포인트는 현금 및 기타 재화로 환전·양도·판매할 수 없으며, 다른 회원에게 송금하거나 선물할 수 없습니다.
+          </Text>
+          <Text style={styles.paragraph}>
+            3. 포인트의 사용 가능 범위, 사용 순서, 유효기간 및 소멸 조건 등은 서비스 내 안내 및 별도 정책에 따릅니다.
           </Text>
 
-          <Text style={styles.subArticleTitle}>1. 미성년자 관련 금지 행위</Text>
-          <View style={styles.numberedList}>
-            <Text style={styles.numberedItem}>1) 미성년자 또는 미성년으로 보이는 인물을 등장시키거나 암시하는 대화·닉네임·프로필 작성</Text>
-            <Text style={styles.numberedItem}>2) 미성년자에게 서비스 이용을 권유·유도하는 행위</Text>
-            <Text style={styles.numberedItem}>3) 나이를 속이거나, 나이 속임을 부추기거나 돕는 행위</Text>
-          </View>
-
-          <Text style={styles.subArticleTitle}>2. 비동의·강제·폭력 조장 행위</Text>
-          <View style={styles.numberedList}>
-            <Text style={styles.numberedItem}>1) 현실에서 타인의 의사에 반하는 강제 행위(강간, 폭행 등)를 미화·조장·위협하는 내용</Text>
-            <Text style={styles.numberedItem}>2) 상대방의 거절·차단 의사에도 반복적으로 메시지를 전송하거나 스토킹, 괴롭힘을 하는 행위</Text>
-            <Text style={styles.numberedItem}>3) 자해·타해 등 명백히 위험한 행동을 부추기거나 권유하는 발언</Text>
-          </View>
-
-          <Text style={styles.subArticleTitle}>3. 불법 촬영물·성착취물 관련 행위</Text>
-          <View style={styles.numberedList}>
-            <Text style={styles.numberedItem}>1) 불법 촬영물(몰래카메라), 성착취물, 리벤지 포르노 등으로 의심되는 자료를 요청·전송·유통하는 행위</Text>
-            <Text style={styles.numberedItem}>2) 위와 같은 자료를 공유하는 방·사이트·채널 등에 대한 홍보, 링크·접속 경로를 제공하는 행위</Text>
-          </View>
-
-          <Text style={styles.subArticleTitle}>4. 성매매 및 대가성 만남에 관한 행위</Text>
-          <View style={styles.numberedList}>
-            <Text style={styles.numberedItem}>1) 성매매, 조건만남, 유사 성매매를 제안·알선·홍보하는 행위</Text>
-            <Text style={styles.numberedItem}>2) 금전, 선물, 기프트콘 기타 경제적 이익을 조건으로 한 성적 행위·만남을 제안하는 행위</Text>
-            <Text style={styles.numberedItem}>3) 성매매·조건만남 관련 단체, 카페, 유료방, 기타 플랫폼을 홍보·유도하는 행위</Text>
-          </View>
-
-          <Text style={styles.subArticleTitle}>5. 범죄·마약·불법 행위 관련</Text>
-          <View style={styles.numberedList}>
-            <Text style={styles.numberedItem}>1) 마약·불법 약물의 사용, 구매, 판매, 유통에 관한 정보를 제공·요청·조장하는 행위</Text>
-            <Text style={styles.numberedItem}>2) 폭행, 협박, 사기, 도난, 해킹 등 범죄행위를 구체적으로 논의·조장하는 행위</Text>
-            <Text style={styles.numberedItem}>3) 기타 형사처벌 대상이 되는 모든 불법 행위</Text>
-          </View>
-
-          <Text style={styles.subArticleTitle}>6. 개인정보 및 사생활 침해</Text>
-          <View style={styles.numberedList}>
-            <Text style={styles.numberedItem}>1) 상대방의 실명, 전화번호, 주소, 직장, SNS 계정 등 개인정보를 동의 없이 요구·수집·공개·유포하는 행위</Text>
-            <Text style={styles.numberedItem}>2) 대화 내용, 사진, 프로필 등을 캡처하거나 기록하여 서비스 외부에 유포·공개·공갈·협박에 사용하는 행위</Text>
-            <Text style={styles.numberedItem}>3) 개인정보를 빌미로 금전 또는 기타 이익을 요구·강요하는 행위</Text>
-          </View>
-
-          <Text style={styles.subArticleTitle}>7. 욕설·혐오·차별 표현</Text>
-          <View style={styles.numberedList}>
-            <Text style={styles.numberedItem}>1) 인종, 성별, 성적지향, 장애, 출신 지역, 직업 등을 이유로 특정인 또는 집단을 비하·모욕하는 표현</Text>
-            <Text style={styles.numberedItem}>2) 과도한 욕설, 인신공격, 모욕적 발언을 반복하는 행위</Text>
-            <Text style={styles.numberedItem}>3) 특정 집단에 대한 증오, 폭력을 선동하거나 정당화하는 표현</Text>
-          </View>
-
-          <Text style={styles.subArticleTitle}>8. 스팸·광고 및 상업적 이용</Text>
-          <View style={styles.numberedList}>
-            <Text style={styles.numberedItem}>1) 서비스 목적과 무관한 상품·서비스·단체·사이트를 홍보하는 행위</Text>
-            <Text style={styles.numberedItem}>2) 자동 프로그램, 홍보용 봇 등을 이용하여 대량으로 메시지를 발송하는 행위</Text>
-            <Text style={styles.numberedItem}>3) 다른 사이트, 커뮤니티, 유료 단톡방, 외부 플랫폼으로 이용자를 지속적으로 유도하는 행위</Text>
-          </View>
-
-          <Text style={styles.subArticleTitle}>9. 기술적·시스템적 침해</Text>
-          <View style={styles.numberedList}>
-            <Text style={styles.numberedItem}>1) 해킹, 크래킹, 비정상적인 방식으로 서버 또는 시스템에 접근하려는 시도</Text>
-            <Text style={styles.numberedItem}>2) 버그·취약점을 악용하여 부당한 이익을 얻거나 서비스에 장애를 유발하는 행위</Text>
-            <Text style={styles.numberedItem}>3) 애플리케이션, 서버, 데이터 등을 무단으로 변조·복제·역분석·재배포하는 행위</Text>
-          </View>
-
-          <Text style={styles.subArticleTitle}>10. 기타 부적절한 행위</Text>
-          <View style={styles.numberedList}>
-            <Text style={styles.numberedItem}>1) 일반적인 사회 통념상 서비스 내에서 허용되기 어려운 수준의 음란·잔혹 표현을 지속적으로 게시·전송하는 행위</Text>
-            <Text style={styles.numberedItem}>2) 서비스 이용약관, 본 운영방침, 기타 관련 법령을 반복적으로 위반하는 행위</Text>
-          </View>
-
+          <Text style={styles.articleTitle}>제14조(포인트 구매 및 결제)</Text>
           <Text style={styles.paragraph}>
-            ② 회사는 제1항 각 호에 해당하는 행위가 확인될 경우, 사전 경고 없이 게시물·프로필·대화 내용을 삭제 또는 차단하고, 계정에 대한 이용 제한, 정지, 영구 이용제한 등의 조치를 취할 수 있다.
+            1. 포인트 구매는 각 오픈마켓(App Store, Google Play 등)에서 제공하는 인앱 결제 방식을 통해 이루어지며, 결제 수단·한도·정산 방식 등은 각 오픈마켓 사업자의 정책 및 관련 법령을 따릅니다.
+          </Text>
+          <Text style={styles.paragraph}>
+            2. 회원은 결제 전 포인트의 상품명, 가격, 수량 등을 반드시 확인해야 하며, 회사는 표시된 정보가 실제와 다르지 않도록 주의합니다.
+          </Text>
+          <Text style={styles.paragraph}>
+            3. 미성년자는 서비스 이용이 제한되므로, 미성년자 명의의 결제 등은 허용하지 않습니다.
           </Text>
 
-          <Text style={styles.articleTitle}>제5조(프로필 및 닉네임 운영 기준)</Text>
+          <Text style={styles.articleTitle}>제15조(포인트 사용 및 환불)</Text>
           <Text style={styles.paragraph}>
-            ① 다음 각 호에 해당하는 프로필, 닉네임, 상태메시지, 사진 등은 제한·수정·삭제 및 제재 대상이 될 수 있다.
+            1. 회원은 포인트를 사용하여 1:1 채팅 발송 등 서비스 내 유료 기능을 이용할 수 있습니다.
+          </Text>
+          <Text style={styles.paragraph}>
+            2. 이미 사용된 포인트(채팅 발송 등)에 대해서는 서비스 특성상 환불이 제한될 수 있습니다.
+          </Text>
+          <Text style={styles.paragraph}>
+            3. 결제 오류, 중복 결제 등 과오금이 발생한 경우, 회사는 관련 법령 및 각 오픈마켓 사업자의 정책에 따라 과오금 전액을 환불합니다.
+          </Text>
+          <Text style={styles.paragraph}>
+            4. 미사용 포인트의 환불 가능 여부, 환불 수수료, 환불 절차 등 구체적인 기준은 서비스 내 '이용 안내', '이용약관', '환불 안내' 또는 고객센터를 통해 별도로 고지합니다.
+          </Text>
+          <Text style={styles.paragraph}>
+            5. 인앱 결제 환불은 원칙적으로 각 오픈마켓(App Store, Google Play 등)의 약관 및 정책을 따르며, 회사는 관련 법령이 허용하는 범위 내에서 환불을 지원합니다.
+          </Text>
+
+          <Text style={styles.subArticleTitle}>제5장 게시글 및 채팅 이용</Text>
+
+          <Text style={styles.articleTitle}>제16조(이용자 콘텐츠의 책임)</Text>
+          <Text style={styles.paragraph}>
+            1. 회원이 서비스 내에서 작성·업로드·전송하는 게시글, 채팅 등의 모든 이용자 콘텐츠에 대한 책임은 해당 회원 본인에게 있습니다.
+          </Text>
+          <Text style={styles.paragraph}>
+            2. 회사는 필요한 경우, 서비스 운영·보안·불법행위 방지·분쟁 해결을 위하여 관련 법령이 허용하는 범위 내에서 이용자 콘텐츠를 열람·보관·삭제할 수 있습니다.
+          </Text>
+          <Text style={styles.paragraph}>
+            3. 회원은 타인의 초상권, 개인정보, 저작권 등 제3자의 권리를 침해하지 않도록 주의해야 합니다.
+          </Text>
+
+          <Text style={styles.articleTitle}>제17조(금지 행위)</Text>
+          <Text style={styles.paragraph}>
+            회원은 서비스 이용과 관련하여 다음 각 호의 행위를 해서는 안 됩니다.
           </Text>
           <View style={styles.numberedList}>
-            <Text style={styles.numberedItem}>1. 미성년자 또는 미성년을 직접적으로 연상시키는 표현·이미지(교복 사진, "학생", "로리/쇼타" 등의 문구 포함)</Text>
-            <Text style={styles.numberedItem}>2. 타인의 사진, 연예인·유명인 사진, 도용된 이미지, 초상권·저작권을 침해하는 자료</Text>
-            <Text style={styles.numberedItem}>3. 노골적인 성기 노출 및 관련 법령상 음란물에 해당하는 수준의 사진</Text>
-            <Text style={styles.numberedItem}>4. 특정인 또는 특정 집단을 조롱·비하·협박하는 내용을 포함한 문구 및 이미지</Text>
+            <Text style={styles.numberedItem}>1. 가입 시 또는 이용 중 허위 정보 기재, 타인의 정보(휴대전화번호, 프로필 등) 도용</Text>
+            <Text style={styles.numberedItem}>2. 타인을 사칭하거나, 타인의 명예·신용·평판을 훼손하는 행위</Text>
+            <Text style={styles.numberedItem}>3. 욕설, 비방, 혐오 표현, 차별적 표현, 스팸성 메시지 전송</Text>
+            <Text style={styles.numberedItem}>4. 상업적 광고·홍보, 불법 도박, 피라미드·다단계 모집 등 서비스 목적에 맞지 않는 홍보 행위</Text>
+            <Text style={styles.numberedItem}>5. 다음에 해당하는 불법적인 성 관련 콘텐츠 또는 행위: 미성년자를 등장시키거나 미성년자를 대상으로 하는 모든 성적 표현·행위, 불법 촬영물·리벤지 포르노 등 법령에 위반되는 음란물의 제작·유포·소지·공유, 성매매, 성매매 알선, 성적 서비스 대가 지급·요구 등 불법 행위, 타인의 동의 없는 노출·성적 괴롭힘에 해당하는 행위</Text>
+            <Text style={styles.numberedItem}>6. 서비스 외부에서의 만남·금전 거래·조건 만남 등을 강요하거나 집요하게 유도하는 행위</Text>
+            <Text style={styles.numberedItem}>7. 서비스의 정상적인 운영을 방해하는 행위 (예: 과도한 반복 요청, 시스템 취약점 악용, 비인가 자동화 도구 사용 등)</Text>
+            <Text style={styles.numberedItem}>8. 회사의 동의 없이 서비스 내 정보를 수집·복제·배포하거나, 유사·경쟁 서비스를 만들기 위해 사용하는 행위</Text>
+            <Text style={styles.numberedItem}>9. 기타 관계 법령, 이 약관 및 서비스 내 운영정책에 위반되거나, 공공질서·미풍양속에 반하는 행위</Text>
           </View>
-          <Text style={styles.paragraph}>
-            ② 회사는 운영상 필요하다고 판단하는 경우, 별도 사전 안내 없이 문제되는 프로필·이미지·상태메시지를 숨김·삭제하거나 수정 요청, 계정 제재 등의 조치를 취할 수 있다.
-          </Text>
 
-          <Text style={styles.articleTitle}>제6조(신고 및 제재)</Text>
+          <Text style={styles.articleTitle}>제18조(신고·차단 및 회사의 조치)</Text>
           <Text style={styles.paragraph}>
-            ① 이용자는 서비스 내 신고 기능 또는 회사가 지정한 고객센터를 통하여 운영방침 위반이 의심되는 계정·행위에 대해 신고할 수 있다.
+            1. 회원은 서비스 내 신고·차단 기능을 통해 타 회원의 부적절한 이용 행위를 신고하거나, 특정 회원을 차단할 수 있습니다.
           </Text>
           <Text style={styles.paragraph}>
-            ② 회사는 신고 내용, 시스템 로그, 관련 자료 등을 종합적으로 검토하여 다음 각 호의 조치를 취할 수 있다.
+            2. 회사는 신고 내용, 로그 기록 등을 검토하여, 필요 시 다음과 같은 조치를 취할 수 있습니다.
           </Text>
           <View style={styles.numberedList}>
-            <Text style={styles.numberedItem}>1. 1차 경고 및 일정 기간 채팅·일부 기능 제한</Text>
-            <Text style={styles.numberedItem}>2. 일정 기간 계정 정지(일시 이용 제한)</Text>
-            <Text style={styles.numberedItem}>3. 중대한 위반 또는 반복 위반 시 계정 영구 정지 및 재가입 제한</Text>
-            <Text style={styles.numberedItem}>4. 범죄가 의심되는 경우 관련 기관의 요청에 따라 또는 회사 판단 하에 수사기관에 자료 제공 및 수사 협조</Text>
+            <Text style={styles.numberedItem}>1) 경고, 일시적인 채팅·게시글 작성 제한</Text>
+            <Text style={styles.numberedItem}>2) 일정 기간 서비스 이용 정지</Text>
+            <Text style={styles.numberedItem}>3) 심각하거나 반복적인 위반 시 계정 영구 정지 및 재가입 제한</Text>
           </View>
           <Text style={styles.paragraph}>
-            ③ 제재의 수준과 기간은 위반 행위의 종류, 횟수, 고의성, 피해 규모 등을 고려하여 회사가 정한다.
+            3. 회사는 법령 위반이 의심되는 중대한 사안에 대해 수사기관 등 관계 기관에 신고 또는 자료를 제공할 수 있습니다.
+          </Text>
+          <Text style={styles.paragraph}>
+            4. 회사가 위 조치를 취하는 경우, 가능한 범위 내에서 그 사유와 내용을 회원에게 안내합니다. 다만, 수사·법적 절차 등 불가피한 사유가 있는 경우에는 사후 안내가 이루어질 수 있습니다.
           </Text>
 
-          <Text style={styles.articleTitle}>제7조(책임 범위)</Text>
+          <Text style={styles.subArticleTitle}>제6장 계약 해지 및 이용제한</Text>
+
+          <Text style={styles.articleTitle}>제19조(회원의 탈퇴)</Text>
           <Text style={styles.paragraph}>
-            ① 서비스 내에서 이용자 간 자발적으로 이루어진 대화, 만남, 거래 등으로 인하여 발생한 분쟁은 원칙적으로 당사자 간의 책임이며, 회사는 관련 법령에서 특별히 정한 경우를 제외하고 그 분쟁에 개입하지 않는다.
+            1. 회원은 서비스 내 '회원탈퇴' 기능 또는 회사가 정한 절차를 통하여 언제든지 탈퇴를 요청할 수 있습니다.
           </Text>
           <Text style={styles.paragraph}>
-            ② 이용자가 로그, 신고 내용 등 객관적인 자료를 근거로 회사에 사실 확인을 요청하는 경우, 회사는 내부 기준에 따라 사실관계 확인 및 필요한 범위 내에서 조치를 할 수 있다.
+            2. 회원이 탈퇴할 경우, 관계 법령 및 개인정보 처리방침에서 정한 바를 제외하고, 계정 정보 및 이용 기록은 파기되거나 익명화될 수 있습니다.
           </Text>
           <Text style={styles.paragraph}>
-            ③ 이용자의 계정 관리 소홀, 단말기 보안 미비, 비밀번호 유출 등 이용자 귀책 사유로 발생한 손해에 대하여 회사는 책임을 부담하지 않는다.
+            3. 회원 탈퇴 전까지 사용하지 않은 포인트 및 기타 권리는, 별도 정책에서 정한 바가 없는 한 탈퇴와 동시에 소멸되며, 관련 법령이 허용하는 범위 내에서 환불이 제한될 수 있습니다.
           </Text>
 
-          <Text style={styles.articleTitle}>제8조(운영방침의 변경)</Text>
+          <Text style={styles.articleTitle}>제20조(회사의 이용제한·계약 해지)</Text>
           <Text style={styles.paragraph}>
-            ① 회사는 서비스 운영 환경 변화, 관련 법령 개정, 내부 정책 변경 등의 사유가 발생하는 경우 본 운영방침을 변경할 수 있다.
+            1. 회사는 회원이 이 약관 또는 운영정책을 위반한 경우, 서비스 이용을 제한하거나 이용계약을 해지할 수 있습니다.
           </Text>
           <Text style={styles.paragraph}>
-            ② 회사는 운영방침을 변경하는 경우, 변경 내용 및 시행일자를 명시하여 시행일 7일 전까지 서비스 내 공지사항 등을 통하여 이용자에게 안내한다. 다만, 이용자에게 불리하게 변경되는 사항이 있는 경우에는 원칙적으로 30일 전에 공지한다.
+            2. 특히 제17조(금지 행위)에 해당하는 경우, 회사는 사안의 경중에 따라 즉시 이용정지, 계정 영구 정지, 재가입 제한 등의 조치를 취할 수 있습니다.
           </Text>
           <Text style={styles.paragraph}>
-            ③ 이용자가 변경된 운영방침의 시행일 이후에도 계속해서 서비스를 이용하는 경우, 회사는 이용자가 변경된 운영방침에 동의한 것으로 볼 수 있다.
+            3. 회사는 이용제한 또는 계약 해지 조치를 취하는 경우, 가능한 한 사전에 회원에게 그 사유와 내용을 통지합니다. 다만, 긴급하게 조치할 필요가 있는 경우에는 사후에 통지할 수 있습니다.
+          </Text>
+          <Text style={styles.paragraph}>
+            4. 회사가 계약을 해지하는 경우, 관련 법령 및 환불 정책에 따라 회원의 권리·의무를 정리하며, 이미 사용된 포인트 및 약관·정책에 따라 환불이 불가능한 금액에 대해서는 환불 의무가 없습니다.
+          </Text>
+
+          <Text style={styles.subArticleTitle}>제7장 손해배상 및 면책</Text>
+
+          <Text style={styles.articleTitle}>제21조(손해배상)</Text>
+          <Text style={styles.paragraph}>
+            1. 회사가 고의 또는 중대한 과실로 이 약관을 위반하여 회원에게 손해가 발생한 경우, 회사는 관계 법령에 따라 그 손해를 배상할 책임이 있습니다.
+          </Text>
+          <Text style={styles.paragraph}>
+            2. 회원이 이 약관을 위반하거나 위법 행위를 하여 회사에 손해를 입힌 경우, 회원은 회사에 그 손해를 배상하여야 합니다.
+          </Text>
+
+          <Text style={styles.articleTitle}>제22조(회사의 면책)</Text>
+          <Text style={styles.paragraph}>
+            1. 회사는 다음 각 호의 사유로 인해 발생한 손해에 대하여 책임을 지지 않습니다.
+          </Text>
+          <View style={styles.numberedList}>
+            <Text style={styles.numberedItem}>1) 천재지변, 전쟁, 테러, 정전, 통신 장애 등 회사가 통제할 수 없는 불가항력적 사유</Text>
+            <Text style={styles.numberedItem}>2) 회원의 고의 또는 과실로 계정 정보가 유출되거나 잘못 사용된 경우</Text>
+            <Text style={styles.numberedItem}>3) 회원 상호 간 또는 회원과 제3자 간 분쟁(오프라인에서의 만남 등)을 포함한 민·형사상의 문제</Text>
+            <Text style={styles.numberedItem}>4) 회사가 제공하는 서비스 외의 제3자 서비스(오픈마켓, 통신사, 단말기 제조사 등)에서 발생한 문제</Text>
+          </View>
+          <Text style={styles.paragraph}>
+            2. 회사는 서비스 화면에 표시되거나, 서비스에 링크된 외부 사이트·콘텐츠 등에 대한 신뢰도, 정확성, 적법성에 대하여 보증하지 않으며, 그로 인해 발생한 손해에 대하여 책임을 지지 않습니다.
+          </Text>
+          <Text style={styles.paragraph}>
+            3. 회사는 무료로 제공하는 서비스에 대하여, 관련 법령에 특별한 규정이 없는 한 손해배상 책임을 부담하지 않습니다.
+          </Text>
+
+          <Text style={styles.articleTitle}>제23조(분쟁 해결 및 관할법원)</Text>
+          <Text style={styles.paragraph}>
+            1. 회사는 회원이 제기하는 의견이나 불만을 성실히 검토하고, 필요한 경우 신속하게 처리하기 위해 노력합니다.
+          </Text>
+          <Text style={styles.paragraph}>
+            2. 회사와 회원 사이에 분쟁이 발생한 경우, 회사와 회원은 원만한 해결을 위해 협의합니다.
+          </Text>
+          <Text style={styles.paragraph}>
+            3. 협의로도 해결되지 않는 분쟁에 관하여는, 대한민국 법을 준거법으로 하며, 민사소송법상 관할 법원을 제1심 관할 법원으로 합니다.
+          </Text>
+
+          <Text style={styles.articleTitle}>제24조(약관의 효력 및 변경 고지)</Text>
+          <Text style={styles.paragraph}>
+            1. 이 약관은 시행일자부터 효력이 발생합니다.
+          </Text>
+          <Text style={styles.paragraph}>
+            2. 회사는 약관을 변경하는 경우 제3조에 따라 공지하며, 변경된 약관은 공지된 적용일로부터 효력을 가집니다.
           </Text>
         </View>
       </ScrollView>
@@ -327,4 +454,8 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
 });
+
+
+
+
 

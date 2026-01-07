@@ -17,7 +17,6 @@ export type RootStackParamList = {
   TermsOfService: undefined;
   PrivacyPolicy: undefined;
   NotificationSettings: undefined;
-  NotificationTest: undefined;
 };
 
 export type MainTabParamList = {
