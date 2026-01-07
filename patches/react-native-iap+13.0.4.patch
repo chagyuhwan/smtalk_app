@@ -1,0 +1,17 @@
+diff --git a/node_modules/react-native-iap/android/build.gradle b/node_modules/react-native-iap/android/build.gradle
+index e4a79cc..8d1dd56 100644
+--- a/node_modules/react-native-iap/android/build.gradle
++++ b/node_modules/react-native-iap/android/build.gradle
+@@ -63,10 +63,12 @@ android {
+   productFlavors {
+     amazon {
+       dimension "store"
++      matchingFallbacks = ['play']
+     }
+ 
+     play {
+       dimension "store"
++      isDefault = true
+     }
+   }
+ 
