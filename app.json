@@ -7,7 +7,9 @@
     "icon": "./assets/appicon2.png",
     "userInterfaceStyle": "light",
     "splash": {
-      "backgroundColor": "#1f2937"
+      "backgroundColor": "#1f2937",
+      "image": "./assets/appicon2.png",
+      "resizeMode": "contain"
     },
     "autolinking": {
       "exclude": [
