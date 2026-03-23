@@ -34,10 +34,15 @@
                 "**/libc++_shared.so"
               ]
             }
+          },
+          "ios": {
+            "useFrameworks": "static"
           }
         }
       ],
-      "react-native-iap"
+      "react-native-iap",
+      "@react-native-firebase/app",
+      "@react-native-firebase/auth"
     ],
     "ios": {
       "supportsTablet": true,
@@ -46,7 +51,22 @@
         "NSPhotoLibraryAddUsageDescription": "게시글에 사진을 추가하기 위해 갤러리 접근 권한이 필요합니다.",
         "NSCameraUsageDescription": "게시글에 사진을 추가하기 위해 카메라 접근 권한이 필요합니다.",
         "NSUserNotificationsUsageDescription": "새로운 메시지를 받기 위해 알림 권한이 필요합니다.",
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "CFBundleURLTypes": [
+          {
+            "CFBundleURLSchemes": ["smtalk"]
+          }
+        ],
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true,
+          "NSExceptionDomains": {
+            "auth.niceid.co.kr": {
+              "NSExceptionAllowsInsecureHTTPLoads": false,
+              "NSIncludesSubdomains": true,
+              "NSExceptionRequiresForwardSecrecy": false
+            }
+          }
+        }
       },
       "bundleIdentifier": "com.kanc.randomchat",
       "googleServicesFile": "./GoogleService-Info.plist",
@@ -67,7 +87,19 @@
       ],
       "package": "com.kanc.randomchat",
       "versionCode": 1,
-      "googleServicesFile": "./google-services.json"
+      "googleServicesFile": "./google-services.json",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "smtalk"
+            }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"

@@ -3,16 +3,14 @@
  * 전화번호 인증 및 사용자 관리
  * 
  * Firebase 웹 SDK를 사용합니다 (React Native Expo 환경)
+ * iOS에서는 reCAPTCHA 제한으로 인해 네이티브 빌드가 필요할 수 있습니다.
  */
 
 import { 
-  signInWithPhoneNumber, 
-  PhoneAuthProvider, 
+  PhoneAuthProvider,
   signInWithCredential,
   signOut as firebaseSignOut,
   User,
-  ConfirmationResult,
-  RecaptchaVerifier,
 } from 'firebase/auth';
 import { auth } from '../config/firebase';
 import { Platform } from 'react-native';
@@ -32,7 +30,7 @@ export interface VerifyCodeResult {
 }
 
 class FirebaseAuthService {
-  private confirmationResult: ConfirmationResult | null = null;
+  private verificationId: string | null = null;
 
   /**
    * 전화번호 형식 검증
@@ -63,11 +61,9 @@ class FirebaseAuthService {
   /**
    * 인증 코드 발송
    * @param phoneNumber 전화번호 (010-1234-5678 형식)
-   * @param recaptchaVerifier reCAPTCHA verifier (Firebase 웹 SDK RecaptchaVerifier)
    */
   async sendVerificationCode(
-    phoneNumber: string, 
-    recaptchaVerifier: RecaptchaVerifier
+    phoneNumber: string
   ): Promise<PhoneAuthResult> {
     try {
       const normalized = this.normalizePhoneNumber(phoneNumber);
@@ -83,22 +79,24 @@ class FirebaseAuthService {
       console.log('국제 형식 전화번호:', internationalPhone);
       console.log('플랫폼:', Platform.OS);
 
-      // Firebase 웹 SDK를 사용하여 전화번호 인증
-      const confirmation = await signInWithPhoneNumber(
-        auth,
-        internationalPhone,
-        recaptchaVerifier
+      // 웹 SDK 사용
+      const phoneAuthProvider = new PhoneAuthProvider(auth);
+      
+      // iOS에서 웹 SDK 사용 시 reCAPTCHA verifier가 필요하지만 제공할 수 없으므로
+      // 에러를 더 명확하게 처리
+      const verificationId = await phoneAuthProvider.verifyPhoneNumber(
+        internationalPhone
       );
       
-      console.log('인증 코드 발송 성공, verificationId:', confirmation.verificationId);
+      console.log('인증 코드 발송 성공, verificationId:', verificationId);
       
-      this.confirmationResult = confirmation;
+      this.verificationId = verificationId;
       
       return {
         success: true,
         message: '인증 코드가 발송되었습니다.',
-        verificationId: confirmation.verificationId,
-        sessionId: confirmation.verificationId,
+        verificationId: verificationId,
+        sessionId: verificationId,
       };
     } catch (error: any) {
       console.error('인증 코드 발송 오류:', error);
@@ -119,10 +117,16 @@ class FirebaseAuthService {
         errorMessage = '일일 인증 코드 발송 한도를 초과했습니다. 내일 다시 시도해주세요.';
       } else if (error.code === 'auth/app-not-authorized') {
         errorMessage = '앱이 인증되지 않았습니다. Firebase Console에서 설정을 확인해주세요.';
-      } else if (error.code === 'auth/captcha-check-failed') {
-        errorMessage = 'reCAPTCHA 검증에 실패했습니다. 다시 시도해주세요.';
+      } else if (error.code === 'auth/argument-error') {
+        if (Platform.OS === 'ios') {
+          // iOS에서 reCAPTCHA 문제로 발생하는 경우
+          // Firebase 웹 SDK는 iOS에서 reCAPTCHA verifier가 필요한데 React Native에서는 제공할 수 없음
+          errorMessage = 'iOS에서는 현재 Firebase 전화번호 인증이 제한됩니다.\n\n개발 단계에서는 Android 기기에서 테스트해주시거나, 다음주 예정된 NICE 성인인증 전환을 기다려주세요.';
+        } else {
+          errorMessage = '인증 설정에 문제가 있습니다. Firebase Console에서 설정을 확인해주세요.';
+        }
       } else if (error.message) {
-        errorMessage = `${error.message} (코드: ${error.code || 'unknown'})`;
+        errorMessage = error.message;
       }
 
       return {
@@ -137,7 +141,7 @@ class FirebaseAuthService {
    */
   async verifyCode(code: string): Promise<VerifyCodeResult> {
     try {
-      if (!this.confirmationResult) {
+      if (!this.verificationId) {
         return {
           success: false,
           message: '인증 세션이 만료되었습니다. 다시 시도해주세요.',
@@ -153,12 +157,18 @@ class FirebaseAuthService {
         };
       }
 
-      // Firebase 웹 SDK를 사용하여 인증 코드 검증
-      const result = await this.confirmationResult.confirm(code);
-      const user = result.user;
+      // PhoneAuthCredential 생성 및 인증
+      const phoneAuthProvider = new PhoneAuthProvider(auth);
+      const credential = PhoneAuthProvider.credential(
+        this.verificationId,
+        code
+      );
       
-      // confirmationResult 초기화
-      this.confirmationResult = null;
+      const userCredential = await signInWithCredential(auth, credential);
+      const user = userCredential.user;
+      
+      // verificationId 초기화
+      this.verificationId = null;
 
       return {
         success: true,
@@ -212,7 +222,7 @@ class FirebaseAuthService {
     try {
       console.log('로그아웃 시작');
       await firebaseSignOut(auth);
-      this.confirmationResult = null;
+      this.verificationId = null;
       console.log('로그아웃 성공');
     } catch (error: any) {
       console.error('로그아웃 오류:', error);
@@ -229,7 +239,7 @@ class FirebaseAuthService {
    * 인증 세션 초기화
    */
   resetConfirmation(): void {
-    this.confirmationResult = null;
+    this.verificationId = null;
   }
 }
 

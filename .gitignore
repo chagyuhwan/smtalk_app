@@ -36,6 +36,15 @@ yarn-error.*
 
 # local env files
 .env*.local
+.env
+
+# NICE config (민감한 정보 포함)
+# config/nice.ts는 Git에 포함되지만, 실제 Secret은 환경 변수로 관리 권장
+
+# Backend
+backend/node_modules/
+backend/.env
+backend/*.log
 
 # typescript
 *.tsbuildinfo

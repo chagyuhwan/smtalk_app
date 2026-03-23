@@ -1,7 +1,14 @@
 import { User } from '../types';
 
 export type RootStackParamList = {
-  PhoneAuth: undefined;
+  PhoneAuth: {
+    verified?: boolean;
+    userId?: string;
+    phoneNumber?: string;
+  } | undefined;
+  NiceAuthWebView: {
+    authUrl: string;
+  };
   MainTabs: undefined;
   Chat: {
     chatRoomId: string;

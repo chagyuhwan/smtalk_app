@@ -14,14 +14,15 @@ import {
   Image,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useRoute } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { RouteProp } from '@react-navigation/native';
 import { RootStackParamList } from '../navigation/types';
-import { firebaseAuthService } from '../services/FirebaseAuthService';
+import { authProvider } from '../services/AuthProviderFactory';
+import { AUTH_PROVIDER_TYPE } from '../constants/auth';
 import { firebaseFirestoreService } from '../services/FirebaseFirestoreService';
 import { firebaseStorageService } from '../services/FirebaseStorageService';
 import { auth } from '../config/firebase';
-import { RecaptchaVerifier } from 'firebase/auth';
 import { BDSMPreference, Region } from '../types';
 import { REGION_NAMES, REGION_LIST, getLocationFromRegion } from '../utils/regions';
 import { performanceMonitor } from '../utils/PerformanceMonitor';
@@ -38,6 +39,8 @@ interface Props {
 type AuthStep = 'phone' | 'code' | 'signup';
 
 export default function PhoneAuthScreen({ navigation }: Props) {
+  const route = useRoute<RouteProp<RootStackParamList, 'PhoneAuth'>>();
+  
   // 성능 측정: 화면 포커스 시
   useFocusEffect(
     React.useCallback(() => {
@@ -47,6 +50,22 @@ export default function PhoneAuthScreen({ navigation }: Props) {
       };
     }, [])
   );
+
+  // NICE 인증 완료 후 돌아온 경우 처리
+  useEffect(() => {
+    const params = route.params;
+    if (params?.verified && params?.userId) {
+      console.log('[PhoneAuth] NICE 인증 완료, 회원가입 화면으로 이동');
+      setUserId(params.userId);
+      if (params.phoneNumber) {
+        setPhoneNumber(params.phoneNumber);
+      }
+      setStep('signup');
+      setTimeout(() => {
+        nameInputRef.current?.focus();
+      }, 100);
+    }
+  }, [route.params]);
   
   const [step, setStep] = useState<AuthStep>('phone');
   const [phoneNumber, setPhoneNumber] = useState('');
@@ -61,13 +80,13 @@ export default function PhoneAuthScreen({ navigation }: Props) {
   const [avatarUri, setAvatarUri] = useState<string | undefined>(undefined);
   const [region, setRegion] = useState<Region | undefined>(undefined);
   const [userId, setUserId] = useState<string>('');
+  const [sessionId, setSessionId] = useState<string>('');
   const [showBdsmDropdown, setShowBdsmDropdown] = useState(false);
   const [showRegionDropdown, setShowRegionDropdown] = useState(false);
   const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [agreedToPrivacy, setAgreedToPrivacy] = useState(false);
   const codeInputRef = useRef<TextInput>(null);
   const nameInputRef = useRef<TextInput>(null);
-  const recaptchaVerifierRef = useRef<RecaptchaVerifier | null>(null);
 
   const BDSM_LABELS: Record<BDSMPreference, string> = {
     vanilla: '바닐라',
@@ -135,50 +154,6 @@ export default function PhoneAuthScreen({ navigation }: Props) {
     ]);
   }, []);
 
-  // reCAPTCHA verifier 초기화
-  useEffect(() => {
-    if (Platform.OS === 'web') {
-      // 웹에서는 DOM 요소를 사용하여 RecaptchaVerifier 생성
-      try {
-        const container = document.getElementById('recaptcha-container');
-        if (container) {
-          recaptchaVerifierRef.current = new RecaptchaVerifier(auth, container, {
-            size: 'invisible',
-            callback: () => {
-              console.log('reCAPTCHA verified');
-            },
-            'expired-callback': () => {
-              console.log('reCAPTCHA expired');
-            },
-          } as any);
-        }
-      } catch (error) {
-        console.error('reCAPTCHA 초기화 오류:', error);
-      }
-    } else {
-      // 모바일에서는 RecaptchaVerifier를 생성 (invisible)
-      try {
-        recaptchaVerifierRef.current = new RecaptchaVerifier(auth, {
-          size: 'invisible',
-        } as any);
-      } catch (error) {
-        console.error('reCAPTCHA 초기화 오류:', error);
-      }
-    }
-
-    return () => {
-      // 정리
-      if (recaptchaVerifierRef.current) {
-        try {
-          recaptchaVerifierRef.current.clear();
-        } catch (error) {
-          console.error('reCAPTCHA 정리 오류:', error);
-        }
-        recaptchaVerifierRef.current = null;
-      }
-    };
-  }, []);
-
   // 카운트다운 타이머
   useEffect(() => {
     if (countdown > 0) {
@@ -202,18 +177,27 @@ export default function PhoneAuthScreen({ navigation }: Props) {
       return;
     }
 
-    if (!recaptchaVerifierRef.current) {
-      Alert.alert('오류', 'reCAPTCHA가 초기화되지 않았습니다. 잠시 후 다시 시도해주세요.');
-      return;
-    }
-
     setLoading(true);
     try {
       console.log('인증 코드 발송 시도:', phoneNumber);
-      const response = await firebaseAuthService.sendVerificationCode(phoneNumber, recaptchaVerifierRef.current);
+      const response = await authProvider.sendVerificationCode(phoneNumber);
       console.log('인증 코드 발송 응답:', response);
       
       if (response.success) {
+        // NICE 인증인 경우 WebView로 이동
+        if (AUTH_PROVIDER_TYPE === 'nice' && response.verificationId) {
+          navigation.navigate('NiceAuthWebView', {
+            authUrl: response.verificationId,
+          });
+          setLoading(false);
+          return;
+        }
+        
+        // Firebase 인증인 경우 기존 플로우
+        // sessionId 저장
+        if (response.sessionId) {
+          setSessionId(response.sessionId);
+        }
         setStep('code');
         setCountdown(180); // 3분
         codeInputRef.current?.focus();
@@ -228,7 +212,7 @@ export default function PhoneAuthScreen({ navigation }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [phoneNumber]);
+  }, [phoneNumber, navigation]);
 
   // 인증 코드 검증
   const handleVerifyCode = useCallback(async () => {
@@ -240,7 +224,7 @@ export default function PhoneAuthScreen({ navigation }: Props) {
     setLoading(true);
     try {
       console.log('인증 코드 검증 시작, 코드:', code);
-      const verifyResponse = await firebaseAuthService.verifyCode(code);
+      const verifyResponse = await authProvider.verifyCode(code, sessionId);
       console.log('인증 코드 검증 응답:', {
         success: verifyResponse.success,
         verified: verifyResponse.verified,
@@ -273,7 +257,7 @@ export default function PhoneAuthScreen({ navigation }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [code]);
+  }, [code, sessionId]);
 
   // 회원가입 완료 (또는 정보 업데이트)
   const handleSignup = useCallback(async () => {
@@ -326,16 +310,17 @@ export default function PhoneAuthScreen({ navigation }: Props) {
       return;
     }
 
-    const currentUser = auth.currentUser;
-    if (!currentUser) {
+    // authProvider를 통해 현재 사용자 정보 가져오기
+    const currentAuthUser = authProvider.getCurrentUser();
+    if (!currentAuthUser && !userId) {
       Alert.alert('오류', '인증이 만료되었습니다. 다시 시도해주세요.');
       return;
     }
 
     setLoading(true);
     try {
-      // Firebase Auth의 phoneNumber를 우선 사용, 없으면 state의 phoneNumber 사용
-      let phoneToUse = currentUser.phoneNumber || phoneNumber;
+      // 인증된 사용자의 전화번호를 우선 사용, 없으면 state의 phoneNumber 사용
+      let phoneToUse = currentAuthUser?.phoneNumber || phoneNumber;
       
       // 둘 다 없거나 비어있는 경우 에러
       if (!phoneToUse || phoneToUse.trim() === '') {
@@ -368,13 +353,19 @@ export default function PhoneAuthScreen({ navigation }: Props) {
       }
       
       console.log('회원가입 - 전화번호 확인:', {
-        currentUserPhone: currentUser.phoneNumber,
+        currentAuthUserPhone: currentAuthUser?.phoneNumber,
         statePhone: phoneNumber,
         phoneToUse: phoneToUse,
         normalizedPhone: normalizedPhone
       });
       
-      const userId = currentUser.uid;
+      // userId는 인증 단계에서 이미 설정됨
+      const finalUserId = userId || currentAuthUser?.uid;
+      if (!finalUserId) {
+        Alert.alert('오류', '사용자 ID를 찾을 수 없습니다. 다시 인증해주세요.');
+        setLoading(false);
+        return;
+      }
 
       // 지역에 해당하는 좌표 가져오기
       const location = getLocationFromRegion(region);
@@ -383,7 +374,7 @@ export default function PhoneAuthScreen({ navigation }: Props) {
       let avatarUrl: string | undefined = undefined;
       if (avatarUri) {
         try {
-          avatarUrl = await firebaseStorageService.uploadAvatar(userId, avatarUri);
+          avatarUrl = await firebaseStorageService.uploadAvatar(finalUserId, avatarUri);
           console.log('프로필 이미지 업로드 성공:', avatarUrl);
         } catch (error) {
           console.error('프로필 이미지 업로드 실패:', error);
@@ -394,7 +385,7 @@ export default function PhoneAuthScreen({ navigation }: Props) {
       // 기존 사용자인지 확인 (포인트 유지를 위해)
       let existingUser = null;
       try {
-        existingUser = await firebaseFirestoreService.getUser(userId);
+        existingUser = await firebaseFirestoreService.getUser(finalUserId);
       } catch (error) {
         // 사용자 조회 실패 시 신규 사용자로 간주
         console.log('기존 사용자 조회 실패, 신규 사용자로 처리:', error);
@@ -416,7 +407,7 @@ export default function PhoneAuthScreen({ navigation }: Props) {
         bdsmPreference?: BDSMPreference[];
         bio?: string;
       } = {
-        id: userId,
+        id: finalUserId,
         phoneNumber: normalizedPhone,
         name: name.trim(),
         avatar: avatarUrl,
@@ -440,7 +431,7 @@ export default function PhoneAuthScreen({ navigation }: Props) {
 
       // 약관 동의 내역 저장
       try {
-        await firebaseFirestoreService.setUserAgreement(userId, {
+        await firebaseFirestoreService.setUserAgreement(finalUserId, {
           termsAgreed: true,
           privacyAgreed: true,
           termsAgreedAt: Date.now(),
@@ -454,7 +445,7 @@ export default function PhoneAuthScreen({ navigation }: Props) {
       // Analytics: 회원가입 완료
       const { analyticsService } = await import('../services/AnalyticsService');
       analyticsService.logSignUp('phone');
-      analyticsService.setUserId(userId);
+      analyticsService.setUserId(finalUserId);
 
       Alert.alert('성공', '회원가입이 완료되었습니다.');
       // 메인 화면으로 이동
@@ -481,10 +472,6 @@ export default function PhoneAuthScreen({ navigation }: Props) {
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
-      {Platform.OS === 'web' && (
-        <div id="recaptcha-container" style={{ display: 'none' }} />
-      )}
-      
       <View style={step === 'signup' ? styles.contentSignup : styles.content}>
         <Text style={styles.title}>
           {step === 'phone' && '전화번호 인증'}

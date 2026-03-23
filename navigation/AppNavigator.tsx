@@ -16,6 +16,7 @@ import TermsOfServiceScreen from '../screens/TermsOfServiceScreen';
 import PrivacyPolicyScreen from '../screens/PrivacyPolicyScreen';
 import NotificationSettingsScreen from '../screens/NotificationSettingsScreen';
 import PhoneAuthScreen from '../screens/PhoneAuthScreen';
+import NiceAuthWebViewScreen from '../screens/NiceAuthWebViewScreen';
 import { RootStackParamList, MainTabParamList } from './types';
 import { Text, View, StyleSheet, ActivityIndicator, Image, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -386,6 +387,11 @@ export default function AppNavigator() {
         <Stack.Screen
           name="PhoneAuth"
           component={PhoneAuthScreen}
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen
+          name="NiceAuthWebView"
+          component={NiceAuthWebViewScreen}
           options={{ headerShown: false }}
         />
         <Stack.Screen
