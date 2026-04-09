@@ -13,6 +13,8 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp, useRoute } from '@react-navigation/native';
 import { RootStackParamList } from '../navigation/types';
 import { authProvider } from '../services/AuthProviderFactory';
+import { auth } from '../config/firebase';
+import { signInWithCustomToken } from 'firebase/auth';
 import * as Linking from 'expo-linking';
 
 type NiceAuthWebViewScreenNavigationProp = NativeStackNavigationProp<
@@ -35,6 +37,7 @@ export default function NiceAuthWebViewScreen({ navigation }: Props) {
   const webViewRef = useRef<WebView>(null);
   const [loading, setLoading] = useState(true);
   const [canGoBack, setCanGoBack] = useState(false);
+  const loadingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 딥링크 리스너 설정
   useEffect(() => {
@@ -50,6 +53,7 @@ export default function NiceAuthWebViewScreen({ navigation }: Props) {
 
     return () => {
       subscription.remove();
+      if (loadingTimeoutRef.current) clearTimeout(loadingTimeoutRef.current);
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -95,6 +99,21 @@ export default function NiceAuthWebViewScreen({ navigation }: Props) {
         const result = await authProvider.verifyCode('', webTransactionId);
         
         if (result.success && result.verified && result.user) {
+          // Firebase Auth 세션 생성 (Custom Token으로 로그인)
+          if (result.customToken) {
+            try {
+              await signInWithCustomToken(auth, result.customToken);
+              console.log('[NICE] Firebase signInWithCustomToken 성공');
+            } catch (tokenError: any) {
+              console.error('[NICE] Firebase signInWithCustomToken 실패:', tokenError.message);
+              Alert.alert('오류', 'Firebase 인증 세션 생성에 실패했습니다. 다시 시도해주세요.');
+              navigation.goBack();
+              return;
+            }
+          } else {
+            console.warn('[NICE] customToken 없음 - Firebase Auth 세션 미생성');
+          }
+
           // 인증 성공 - PhoneAuthScreen으로 돌아가서 회원가입 화면으로 이동
           navigation.navigate('PhoneAuth', {
             verified: true,
@@ -162,11 +181,24 @@ export default function NiceAuthWebViewScreen({ navigation }: Props) {
   // WebView 로드 완료
   const handleLoadEnd = () => {
     setLoading(false);
+    if (loadingTimeoutRef.current) {
+      clearTimeout(loadingTimeoutRef.current);
+      loadingTimeoutRef.current = null;
+    }
   };
 
   // WebView 로드 시작
   const handleLoadStart = () => {
     setLoading(true);
+    if (loadingTimeoutRef.current) clearTimeout(loadingTimeoutRef.current);
+    loadingTimeoutRef.current = setTimeout(() => {
+      setLoading(false);
+      Alert.alert(
+        '연결 오류',
+        '인증 서버에 연결할 수 없습니다. 네트워크 상태를 확인 후 다시 시도해주세요.',
+        [{ text: '확인', onPress: () => navigation.goBack() }]
+      );
+    }, 15000);
   };
 
   // 뒤로가기 처리
@@ -208,7 +240,16 @@ export default function NiceAuthWebViewScreen({ navigation }: Props) {
         onError={(syntheticEvent) => {
           const { nativeEvent } = syntheticEvent;
           console.error('[NICE] WebView 오류:', nativeEvent);
-          Alert.alert('오류', '페이지를 불러올 수 없습니다.');
+          setLoading(false);
+          if (loadingTimeoutRef.current) {
+            clearTimeout(loadingTimeoutRef.current);
+            loadingTimeoutRef.current = null;
+          }
+          Alert.alert(
+            '오류',
+            '인증 서버에 연결할 수 없습니다.',
+            [{ text: '확인', onPress: () => navigation.goBack() }]
+          );
         }}
         // JavaScript 활성화
         javaScriptEnabled={true}

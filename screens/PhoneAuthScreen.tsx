@@ -13,6 +13,7 @@ import {
   Modal,
   Image,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import { useFocusEffect, useRoute } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -23,6 +24,7 @@ import { AUTH_PROVIDER_TYPE } from '../constants/auth';
 import { firebaseFirestoreService } from '../services/FirebaseFirestoreService';
 import { firebaseStorageService } from '../services/FirebaseStorageService';
 import { auth } from '../config/firebase';
+import { signInAnonymously } from 'firebase/auth';
 import { BDSMPreference, Region } from '../types';
 import { REGION_NAMES, REGION_LIST, getLocationFromRegion } from '../utils/regions';
 import { performanceMonitor } from '../utils/PerformanceMonitor';
@@ -39,6 +41,7 @@ interface Props {
 type AuthStep = 'phone' | 'code' | 'signup';
 
 export default function PhoneAuthScreen({ navigation }: Props) {
+  const insets = useSafeAreaInsets();
   const route = useRoute<RouteProp<RootStackParamList, 'PhoneAuth'>>();
   
   // 성능 측정: 화면 포커스 시
@@ -170,6 +173,13 @@ export default function PhoneAuthScreen({ navigation }: Props) {
     return `${cleaned.slice(0, 3)}-${cleaned.slice(3, 7)}-${cleaned.slice(7, 11)}`;
   };
 
+  // 심사관 우회용 테스트 번호
+  const REVIEWER_TEST_PHONE = '010-9999-9999';
+  const NICE_TIMEOUT_MS = 15000;
+
+  const NETWORK_ERROR_MSG =
+    '네트워크 연결이 지연되고 있거나, 현재 위치에서는 인증이 제한될 수 있습니다. 잠시 후 다시 시도해 주세요.';
+
   // 인증 코드 발송
   const handleSendCode = useCallback(async () => {
     if (!phoneNumber || phoneNumber.replace(/[^0-9]/g, '').length !== 11) {
@@ -177,39 +187,121 @@ export default function PhoneAuthScreen({ navigation }: Props) {
       return;
     }
 
+    // 심사관 우회 로직: 테스트 번호 입력 시 NICE 인증 생략
+    if (phoneNumber === REVIEWER_TEST_PHONE) {
+      setLoading(true);
+      try {
+        // Firebase 익명 로그인으로 실제 auth 세션 생성
+        // (Firebase Console에서 Anonymous Auth 활성화 필요)
+        let reviewerUid = 'reviewer_demo_' + Date.now();
+        try {
+          const { user: anonUser } = await signInAnonymously(auth);
+          reviewerUid = anonUser.uid;
+        } catch (anonError: any) {
+          console.warn('[심사관 우회] Firebase 익명 로그인 실패 (Anonymous Auth 미활성화):', anonError.message);
+          // 익명 로그인 실패해도 진행 - Firebase Console에서 Anonymous Auth 활성화 필요
+        }
+
+        // Firestore에 다른 데모 유저 2명 생성 (홈·사용자 탭 콘텐츠 채우기)
+        const demoUsers = [
+          {
+            id: 'demo_user_alice',
+            phoneNumber: '01012340001',
+            name: '앨리스',
+            gender: 'female' as const,
+            age: 27,
+            latitude: 37.5172,
+            longitude: 127.0473,
+            region: 'seoul' as Region,
+            isAdmin: false,
+            points: 500,
+            bio: '독서와 카페투어를 좋아하는 서울 거주자입니다.',
+            bdsmPreference: ['submissive' as BDSMPreference],
+          },
+          {
+            id: 'demo_user_bob',
+            phoneNumber: '01012340002',
+            name: '밥',
+            gender: 'male' as const,
+            age: 31,
+            latitude: 37.4979,
+            longitude: 127.0276,
+            region: 'seoul' as Region,
+            isAdmin: false,
+            points: 300,
+            bio: '운동과 요리를 즐기는 강남 거주자입니다.',
+            bdsmPreference: ['dominant' as BDSMPreference],
+          },
+        ];
+        for (const u of demoUsers) {
+          try { await firebaseFirestoreService.createOrUpdateUser(u); } catch { /* 무시 */ }
+        }
+
+        // 데모 유저들의 게시글 생성 (authorId가 달라 충돌 없음)
+        const demoPosts = [
+          { id: 'demo_post_alice', authorId: 'demo_user_alice', authorName: '앨리스', content: '안녕하세요! 서울에서 새로운 인연을 찾고 있어요. 독서 좋아하시는 분 연락 주세요 📚' },
+          { id: 'demo_post_bob', authorId: 'demo_user_bob', authorName: '밥', content: '강남 근처 사시는 분들 같이 운동 하실래요? 가볍게 러닝부터 시작해봐요 🏃' },
+        ];
+        for (const p of demoPosts) {
+          try { await firebaseFirestoreService.createPost(p); } catch { /* 무시 */ }
+        }
+
+        setUserId(reviewerUid);
+        setPhoneNumber(REVIEWER_TEST_PHONE);
+        setStep('signup');
+        setTimeout(() => { nameInputRef.current?.focus(); }, 100);
+      } catch (e: any) {
+        Alert.alert('알림', e.message || '데모 계정 설정에 실패했습니다.');
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
     setLoading(true);
     try {
-      console.log('인증 코드 발송 시도:', phoneNumber);
-      const response = await authProvider.sendVerificationCode(phoneNumber);
-      console.log('인증 코드 발송 응답:', response);
-      
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('TIMEOUT')), NICE_TIMEOUT_MS)
+      );
+
+      const response = await Promise.race([
+        authProvider.sendVerificationCode(phoneNumber),
+        timeoutPromise,
+      ]);
+
       if (response.success) {
         // NICE 인증인 경우 WebView로 이동
         if (AUTH_PROVIDER_TYPE === 'nice' && response.verificationId) {
           navigation.navigate('NiceAuthWebView', {
             authUrl: response.verificationId,
           });
-          setLoading(false);
           return;
         }
-        
+
         // Firebase 인증인 경우 기존 플로우
-        // sessionId 저장
         if (response.sessionId) {
           setSessionId(response.sessionId);
         }
         setStep('code');
-        setCountdown(180); // 3분
+        setCountdown(180);
         codeInputRef.current?.focus();
         Alert.alert('성공', response.message);
       } else {
-        console.error('인증 코드 발송 실패:', response.message);
         Alert.alert('오류', response.message);
       }
     } catch (error: any) {
-      console.error('인증 코드 발송 예외:', error);
-      Alert.alert('오류', error.message || '인증 코드 발송에 실패했습니다.');
+      const isNetworkError =
+        error.message === 'TIMEOUT' ||
+        error.message === 'Network request failed' ||
+        error.name === 'AbortError';
+      Alert.alert(
+        '알림',
+        isNetworkError
+          ? NETWORK_ERROR_MSG
+          : error.message || NETWORK_ERROR_MSG
+      );
     } finally {
+      // 타임아웃·네트워크 오류 포함 모든 경우에 로딩 해제 → 버튼 즉시 재활성화
       setLoading(false);
     }
   }, [phoneNumber, navigation]);
@@ -339,8 +431,11 @@ export default function PhoneAuthScreen({ navigation }: Props) {
         normalizedPhone = '0' + normalizedPhone.substring(2);
       }
       
+      // 심사관 우회 계정은 전화번호 검증 생략 (테스트 번호 010-9999-9999 사용한 경우)
+      const isReviewerAccount = phoneNumber === REVIEWER_TEST_PHONE;
+
       // 정규화된 전화번호가 유효한지 확인 (11자리 숫자, 010으로 시작)
-      if (normalizedPhone.length !== 11 || !normalizedPhone.startsWith('010')) {
+      if (!isReviewerAccount && (normalizedPhone.length !== 11 || !normalizedPhone.startsWith('010'))) {
         console.error('전화번호 검증 실패:', {
           original: phoneToUse,
           normalized: normalizedPhone,
@@ -364,6 +459,32 @@ export default function PhoneAuthScreen({ navigation }: Props) {
       if (!finalUserId) {
         Alert.alert('오류', '사용자 ID를 찾을 수 없습니다. 다시 인증해주세요.');
         setLoading(false);
+        return;
+      }
+
+      // 심사관 우회 계정: Firestore에 프로필 저장 후 메인 화면으로 이동
+      if (isReviewerAccount) {
+        try {
+          const location = getLocationFromRegion(region || 'seoul');
+          await firebaseFirestoreService.createOrUpdateUser({
+            id: finalUserId,
+            phoneNumber: '01099999999',
+            name: name.trim() || '데모유저',
+            gender: gender || 'male',
+            age: parseInt(age.trim(), 10) || 25,
+            latitude: location.latitude,
+            longitude: location.longitude,
+            region: region || ('seoul' as Region),
+            isAdmin: false,
+            points: 10000,
+            bio: bio.trim() || '앱 심사를 위한 데모 계정입니다.',
+            bdsmPreference: bdsmPreference.length > 0 ? bdsmPreference : ['vanilla' as BDSMPreference],
+          });
+        } catch (e) {
+          // 저장 실패해도 메인 화면으로 이동
+        }
+        Alert.alert('성공', '회원가입이 완료되었습니다.');
+        navigation.replace('MainTabs');
         return;
       }
 
@@ -469,7 +590,7 @@ export default function PhoneAuthScreen({ navigation }: Props) {
 
   return (
     <KeyboardAvoidingView
-      style={styles.container}
+      style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
       <View style={step === 'signup' ? styles.contentSignup : styles.content}>
@@ -501,6 +622,19 @@ export default function PhoneAuthScreen({ navigation }: Props) {
               ) : (
                 <Text style={styles.buttonText}>인증 코드 받기</Text>
               )}
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.reviewerHintBox}
+              onPress={() => setPhoneNumber(REVIEWER_TEST_PHONE)}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.reviewerHintTitle}>App Review Demo</Text>
+              <Text style={styles.reviewerHintText}>
+                Tap to use test number: {REVIEWER_TEST_PHONE}
+              </Text>
+              <Text style={styles.reviewerHintSubText}>
+                This bypasses NICE verification (Korean-only service)
+              </Text>
             </TouchableOpacity>
           </View>
         )}
@@ -1285,6 +1419,30 @@ const styles = StyleSheet.create({
     marginTop: 8,
     marginBottom: 16,
     textAlign: 'center',
+  },
+  reviewerHintBox: {
+    marginTop: 24,
+    padding: 14,
+    borderWidth: 1.5,
+    borderColor: '#F59E0B',
+    borderRadius: 10,
+    backgroundColor: '#FFFBEB',
+  },
+  reviewerHintTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#B45309',
+    marginBottom: 4,
+  },
+  reviewerHintText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#92400E',
+    marginBottom: 2,
+  },
+  reviewerHintSubText: {
+    fontSize: 12,
+    color: '#B45309',
   },
 });
 

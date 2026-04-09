@@ -182,11 +182,15 @@ function MainTabs() {
     }, 0);
   }, [chatRooms]);
   
-  // Safe area를 고려한 탭 바 스타일 (위로 올리기 위해 paddingBottom 최소화)
+  // Safe area를 고려한 탭 바 스타일
   const tabBarStyleWithInsets = {
     ...tabNavigatorOptions.tabBarStyle,
-    paddingBottom: Platform.OS === 'ios' ? Math.max(insets.bottom - 10, 4) : 4, // iOS safe area에서 10px 빼서 위로 올림
-    height: Platform.OS === 'ios' ? 50 + Math.max(insets.bottom - 10, 0) : 55, // 높이도 줄여서 위로 올림
+    paddingBottom: Platform.OS === 'ios'
+      ? Math.max(insets.bottom - 10, 4)
+      : insets.bottom + 4,
+    height: Platform.OS === 'ios'
+      ? 50 + Math.max(insets.bottom - 10, 0)
+      : 55 + insets.bottom,
   };
   
   return (

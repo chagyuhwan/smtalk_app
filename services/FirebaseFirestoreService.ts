@@ -1418,6 +1418,13 @@ class FirebaseFirestoreService {
       const receiverData = receiverDoc.data();
       const expoPushToken = receiverData.expoPushToken;
 
+      // 수신자 알림 설정 확인 - messages 알림이 꺼져 있으면 전송하지 않음
+      const notificationSettings = receiverData.notificationSettings;
+      if (notificationSettings && notificationSettings.messages === false) {
+        console.log('[푸시 알림] 수신자가 메시지 알림을 비활성화했습니다. 전송 건너뜀:', receiverId);
+        return;
+      }
+
       console.log('[푸시 알림] 수신자 토큰 확인:', { 
         receiverId, 
         receiverName: receiverData.name,

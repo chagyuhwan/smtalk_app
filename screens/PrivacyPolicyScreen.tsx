@@ -34,7 +34,7 @@ export default function PrivacyPolicyScreen() {
       >
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>개인정보 처리방침</Text>
-          <Text style={styles.effectiveDate}>시행일자 : [시행일]</Text>
+          <Text style={styles.effectiveDate}>시행일자 : 2026년 3월 23일</Text>
           
           <Text style={styles.paragraph}>
             AEROC(이하 "회사")는 회사가 제공하는 성인용 포인트 기반 채팅 서비스 에쎔톡(이하 "서비스")과 관련하여 이용자의 개인정보를 보호하기 위해 「개인정보 보호법」 및 관계 법령을 준수하며, 본 개인정보 처리방침을 통하여 어떤 정보를 어떤 목적으로 수집·이용·보관·파기하는지를 안내합니다.

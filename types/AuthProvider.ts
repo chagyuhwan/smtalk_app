@@ -28,6 +28,7 @@ export interface VerifyResult {
   message: string;
   verified: boolean;
   user?: AuthUser;
+  customToken?: string;
 }
 
 /**

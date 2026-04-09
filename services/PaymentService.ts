@@ -239,35 +239,53 @@ class PaymentService {
   }
 
   /**
-   * 영수증 검증 (클라이언트 사이드 - 실제로는 서버에서 검증해야 함)
+   * 영수증 서버 검증
    */
   private async verifyReceipt(purchase: any): Promise<boolean> {
     try {
       if (!RNIap) return false;
 
-      // 실제로는 서버로 영수증을 전송하여 검증해야 합니다.
-      // 여기서는 기본적인 검증만 수행합니다.
-      
-      // iOS의 경우 영수증 검증
-      if (Platform.OS === 'ios') {
-        // iOS에서는 transactionReceipt 또는 transactionIdentifier가 있어야 함
-        if (!purchase.transactionReceipt && !purchase.transactionIdentifier) {
-          console.warn('iOS: 영수증 정보가 없습니다.');
-          return false;
-        }
-        // 실제로는 Apple 서버에 영수증을 전송하여 검증해야 합니다.
-        // 여기서는 간단히 receipt가 있는지만 확인합니다.
-        return true;
-      }
-
-      // Android의 경우
       if (Platform.OS === 'android') {
-        // Android에서는 purchaseToken이 있어야 함
         if (!purchase.purchaseToken) {
           console.warn('Android: 구매 토큰이 없습니다.');
           return false;
         }
-        // 실제로는 Google Play 서버에 영수증을 전송하여 검증해야 합니다.
+
+        const backendUrl = process.env.EXPO_PUBLIC_NICE_BACKEND_URL;
+        if (!backendUrl) {
+          console.warn('[IAP] 백엔드 URL 미설정 - 클라이언트 검증으로 폴백');
+          return true;
+        }
+
+        const firebaseUser = auth.currentUser;
+        const response = await fetch(`${backendUrl}/api/iap/verify-android`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            packageName: 'com.kanc.randomchat',
+            productId: purchase.productId,
+            purchaseToken: purchase.purchaseToken,
+            userId: firebaseUser?.uid || '',
+          }),
+        });
+
+        const data = await response.json();
+        console.log('[IAP] 서버 검증 결과:', data);
+
+        if (!data.success) {
+          console.error('[IAP] 서버 검증 실패:', data.error);
+          return false;
+        }
+
+        return data.verified === true;
+      }
+
+      // iOS - transactionReceipt 존재 여부 확인 (추후 Apple 서버 검증 추가 가능)
+      if (Platform.OS === 'ios') {
+        if (!purchase.transactionReceipt && !purchase.transactionIdentifier) {
+          console.warn('iOS: 영수증 정보가 없습니다.');
+          return false;
+        }
         return true;
       }
 

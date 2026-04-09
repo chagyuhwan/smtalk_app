@@ -34,7 +34,7 @@ export default function TermsOfServiceScreen() {
       >
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>이용약관</Text>
-          <Text style={styles.effectiveDate}>시행일자 : [시행일]</Text>
+          <Text style={styles.effectiveDate}>시행일자 : 2026년 3월 23일</Text>
           
           <Text style={styles.paragraph}>
             이 약관은 AEROC(이하 "회사")가 제공하는 성인용 포인트 기반 채팅 서비스 "에쎔톡"(이하 "서비스")의 이용과 관련하여, 회사와 회원 간의 권리·의무 및 책임 사항을 규정함을 목적으로 합니다.

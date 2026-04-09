@@ -318,6 +318,7 @@ export class NiceAuthProvider implements IAuthProvider {
         success: true,
         message: '본인인증이 완료되었습니다.',
         verified: true,
+        customToken: result.customToken,
         user: {
           uid: userId,
           phoneNumber: phoneNumber,
@@ -351,6 +352,7 @@ export class NiceAuthProvider implements IAuthProvider {
     verified: boolean;
     message?: string;
     phoneNumber?: string;
+    customToken?: string;
   }> {
     try {
       const url = `${this.backendUrl}/api/nice/auth-result`;
@@ -405,6 +407,7 @@ export class NiceAuthProvider implements IAuthProvider {
         success: true,
         verified: data.verified || false,
         phoneNumber: phoneNumber,
+        customToken: data.customToken || undefined,
         message: data.message || '본인인증이 완료되었습니다.',
       };
     } catch (error: any) {

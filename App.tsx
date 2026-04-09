@@ -1,4 +1,5 @@
 import { Platform, View, Text, StyleSheet } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import AppNavigator from './navigation/AppNavigator';
 import { ChatProvider } from './context/ChatContext';
 // Firebase 초기화를 위해 config/firebase.ts를 import
@@ -19,9 +20,11 @@ export default function App() {
   }
 
   return (
-    <ChatProvider>
-      <AppNavigator />
-    </ChatProvider>
+    <SafeAreaProvider>
+      <ChatProvider>
+        <AppNavigator />
+      </ChatProvider>
+    </SafeAreaProvider>
   );
 }
 

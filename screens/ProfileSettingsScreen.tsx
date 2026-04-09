@@ -323,7 +323,7 @@ export default function ProfileSettingsScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
     >
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: Math.max(insets.top, 50) }]}>
         <TouchableOpacity
           style={styles.backButton}
           onPress={() => navigation.goBack()}
@@ -335,7 +335,7 @@ export default function ProfileSettingsScreen() {
       </View>
       <ScrollView 
         style={styles.content} 
-        contentContainerStyle={styles.contentContainer}
+        contentContainerStyle={[styles.contentContainer, { paddingBottom: insets.bottom + 20 }]}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={true}
       >
@@ -695,7 +695,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingTop: 50,
     paddingHorizontal: 20,
     paddingBottom: 16,
     backgroundColor: '#fff',
