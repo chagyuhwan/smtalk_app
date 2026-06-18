@@ -1,3 +1,15 @@
-# EAS Build에서 제외할 파일들
-# Firebase 설정 파일은 EAS 환경 변수로 제공되므로 여기서 제외하지 않음
+# EAS Build에서 제외할 파일들 (앱 번들 크기/보안)
+# 주의: Firebase 설정 파일(GoogleService-Info.plist, google-services.json)은
+#       네이티브 빌드에 필요하므로 제외하지 않습니다.
 
+# 백엔드 서버는 앱 번들과 무관하므로 제외
+backend/
+
+# 시크릿/키 파일 (절대 빌드에 포함 금지)
+**/serviceAccountKey.json
+**/iap-env-vars.txt
+*.env
+.env.*
+
+# 문서/스크립트
+*.md

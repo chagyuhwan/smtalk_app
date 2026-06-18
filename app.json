@@ -2,7 +2,7 @@
   "expo": {
     "name": "smtalk",
     "slug": "smtalk",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/appicon2.png",
     "userInterfaceStyle": "light",
@@ -103,7 +103,7 @@
         "RECEIVE_BOOT_COMPLETED"
       ],
       "package": "com.kanc.randomchat",
-      "versionCode": 2,
+      "versionCode": 3,
       "googleServicesFile": "./google-services.json",
       "intentFilters": [
         {

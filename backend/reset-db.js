@@ -65,6 +65,20 @@ async function deleteCollection(collectionPath, depth = 0) {
 }
 
 async function resetDB() {
+  // 안전 가드: 실수로 운영 DB를 삭제하는 것을 방지
+  // 실행하려면 명시적으로 환경변수를 지정해야 함:
+  //   CONFIRM_RESET=I_UNDERSTAND node reset-db.js
+  if (process.env.CONFIRM_RESET !== 'I_UNDERSTAND') {
+    console.error('⛔ 안전 가드: 이 스크립트는 모든 데이터를 영구 삭제합니다.');
+    console.error('   정말 실행하려면 다음과 같이 실행하세요:');
+    console.error('   CONFIRM_RESET=I_UNDERSTAND node reset-db.js');
+    process.exit(1);
+  }
+  if (process.env.NODE_ENV === 'production') {
+    console.error('⛔ NODE_ENV=production 에서는 실행할 수 없습니다.');
+    process.exit(1);
+  }
+
   console.log('');
   console.log('🔥 Firestore DB 초기화 시작...');
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');

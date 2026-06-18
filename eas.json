@@ -14,9 +14,7 @@
       },
       "env": {
         "NODE_ENV": "development",
-        "EXPO_PUBLIC_NICE_BACKEND_URL": "https://43-201-164-203.sslip.io",
-        "EXPO_PUBLIC_NICE_CLIENT_ID": "NI3e27f2e2-2bae-4d2e-93d4-e477e915763b",
-        "EXPO_PUBLIC_NICE_CLIENT_SECRET": "ZDlkYzkyZGEtMjFmNy00ZmU0LTg5ZDMtYzRiNGM5MGEyOTIwRDI0MkRGMzMzNTlDMTg2MEZERDk2NEE2",
+        "EXPO_PUBLIC_NICE_BACKEND_URL": "https://3-39-84-235.sslip.io",
         "EXPO_PUBLIC_AUTH_PROVIDER": "nice"
       },
       "node": "20.18.0",
@@ -34,9 +32,7 @@
       },
       "env": {
         "NODE_ENV": "production",
-        "EXPO_PUBLIC_NICE_BACKEND_URL": "https://43-201-164-203.sslip.io",
-        "EXPO_PUBLIC_NICE_CLIENT_ID": "NI3e27f2e2-2bae-4d2e-93d4-e477e915763b",
-        "EXPO_PUBLIC_NICE_CLIENT_SECRET": "ZDlkYzkyZGEtMjFmNy00ZmU0LTg5ZDMtYzRiNGM5MGEyOTIwRDI0MkRGMzMzNTlDMTg2MEZERDk2NEE2",
+        "EXPO_PUBLIC_NICE_BACKEND_URL": "https://3-39-84-235.sslip.io",
         "EXPO_PUBLIC_AUTH_PROVIDER": "nice"
       },
       "node": "20.18.0",
@@ -53,9 +49,7 @@
       },
       "env": {
         "NODE_ENV": "production",
-        "EXPO_PUBLIC_NICE_BACKEND_URL": "https://43-201-164-203.sslip.io",
-        "EXPO_PUBLIC_NICE_CLIENT_ID": "NI3e27f2e2-2bae-4d2e-93d4-e477e915763b",
-        "EXPO_PUBLIC_NICE_CLIENT_SECRET": "ZDlkYzkyZGEtMjFmNy00ZmU0LTg5ZDMtYzRiNGM5MGEyOTIwRDI0MkRGMzMzNTlDMTg2MEZERDk2NEE2",
+        "EXPO_PUBLIC_NICE_BACKEND_URL": "https://3-39-84-235.sslip.io",
         "EXPO_PUBLIC_AUTH_PROVIDER": "nice"
       },
       "node": "20.18.0",

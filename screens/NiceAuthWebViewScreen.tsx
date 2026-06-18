@@ -100,9 +100,11 @@ export default function NiceAuthWebViewScreen({ navigation }: Props) {
         
         if (result.success && result.verified && result.user) {
           // Firebase Auth 세션 생성 (Custom Token으로 로그인)
+          let signedInUid: string | null = null;
           if (result.customToken) {
             try {
-              await signInWithCustomToken(auth, result.customToken);
+              const cred = await signInWithCustomToken(auth, result.customToken);
+              signedInUid = cred.user.uid;
               console.log('[NICE] Firebase signInWithCustomToken 성공');
             } catch (tokenError: any) {
               console.error('[NICE] Firebase signInWithCustomToken 실패:', tokenError.message);
@@ -115,9 +117,11 @@ export default function NiceAuthWebViewScreen({ navigation }: Props) {
           }
 
           // 인증 성공 - PhoneAuthScreen으로 돌아가서 회원가입 화면으로 이동
+          // Firestore 규칙(request.auth.uid == userId) 통과를 위해
+          // 실제 로그인된 Firebase Auth UID를 우선 사용
           navigation.navigate('PhoneAuth', {
             verified: true,
-            userId: result.user.uid,
+            userId: signedInUid || auth.currentUser?.uid || result.user.uid,
             phoneNumber: result.user.phoneNumber || '',
           });
         } else {

@@ -4,10 +4,27 @@ service cloud.firestore {
     
     // ==================== 사용자 (users) ====================
     match /users/{userId} {
-      // 인증된 사용자는 자신의 정보를 읽고 쓸 수 있음
+      // 인증된 사용자는 모든 사용자 정보를 읽을 수 있음
       allow read: if request.auth != null;
-      allow write: if request.auth != null && request.auth.uid == userId;
-      
+
+      // 본인 문서 생성: 포인트는 반드시 0으로만 생성 (보너스/적립은 서버에서만 지급)
+      // isAdmin은 반드시 false로만 생성 → 자가 관리자 권한상승 차단
+      allow create: if request.auth != null
+        && request.auth.uid == userId
+        && request.resource.data.points == 0
+        && request.resource.data.isAdmin == false;
+
+      // 본인 문서 수정: 포인트 "증가" 금지 (증가는 서버 Admin SDK만 가능)
+      // 동일하거나 감소(차감)만 허용 → 클라이언트의 포인트 자가변조/결제 우회 차단
+      // isAdmin 변경 금지 → 자가 관리자 권한상승 차단
+      allow update: if request.auth != null
+        && request.auth.uid == userId
+        && request.resource.data.points <= resource.data.points
+        && request.resource.data.isAdmin == resource.data.isAdmin;
+
+      // 본인 문서 삭제
+      allow delete: if request.auth != null && request.auth.uid == userId;
+
       // 다른 사용자의 문서 업데이트 허용 (좋아요 기능)
       // 중요한 필드들이 변경되지 않았는지 확인
       allow update: if request.auth != null && 
@@ -161,9 +178,8 @@ service cloud.firestore {
     
     // ==================== 에러 로그 (errorLogs) ====================
     match /errorLogs/{errorId} {
-      // 모든 인증된 사용자는 에러 로그를 작성할 수 있음 (크래시 리포팅)
-      // 인증되지 않은 경우도 허용 (웹 환경 대응)
-      allow create: if true;
+      // 인증된 사용자만 에러 로그를 작성할 수 있음 (비인증 무제한 쓰기 차단)
+      allow create: if request.auth != null;
       
       // 관리자만 에러 로그를 읽을 수 있음
       allow read: if request.auth != null && 

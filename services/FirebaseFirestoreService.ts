@@ -21,6 +21,7 @@ import {
   QuerySnapshot,
   DocumentData,
   writeBatch,
+  runTransaction,
 } from 'firebase/firestore';
 import { Platform } from 'react-native';
 import { db, auth } from '../config/firebase';
@@ -214,9 +215,15 @@ class FirebaseFirestoreService {
       }
       if (userData.isAdmin !== undefined) {
         cleanedData.isAdmin = userData.isAdmin;
+      } else if (isNewUser) {
+        // 신규 문서는 항상 isAdmin=false로 생성 (보안 규칙: 자가 권한상승 방지)
+        cleanedData.isAdmin = false;
       }
       if (userData.points !== undefined) {
         cleanedData.points = userData.points;
+      } else if (isNewUser) {
+        // 신규 문서는 항상 points=0으로 생성 (보안 규칙: 포인트 증가는 서버에서만)
+        cleanedData.points = 0;
       }
       if (userData.bdsmPreference !== undefined) {
         cleanedData.bdsmPreference = userData.bdsmPreference;
@@ -244,6 +251,35 @@ class FirebaseFirestoreService {
     } catch (error) {
       console.error('사용자 생성/업데이트 오류:', error);
       throw error;
+    }
+  }
+
+  /**
+   * 포인트 차감 (트랜잭션 기반, 견고)
+   *
+   * 로컬 상태 기반 절대값 쓰기로 인한 덮어쓰기/경쟁 문제를 방지하기 위해
+   * Firestore 트랜잭션으로 현재 잔액을 읽고 차감한다.
+   * 포인트 "감소"이므로 보안 규칙(증가 금지)을 위반하지 않는다.
+   *
+   * @returns 차감 성공 시 true, 잔액 부족 시 false
+   */
+  async spendPoints(userId: string, amount: number): Promise<boolean> {
+    const userRef = doc(db, this.COLLECTIONS.USERS, userId);
+    try {
+      return await runTransaction(db, async (tx) => {
+        const snap = await tx.get(userRef);
+        if (!snap.exists()) return false;
+        const current = snap.data().points || 0;
+        if (current < amount) return false;
+        tx.update(userRef, {
+          points: current - amount,
+          updatedAt: Timestamp.now(),
+        });
+        return true;
+      });
+    } catch (error) {
+      console.error('포인트 차감 트랜잭션 오류:', error);
+      return false;
     }
   }
 

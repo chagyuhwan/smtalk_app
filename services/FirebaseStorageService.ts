@@ -267,7 +267,9 @@ class FirebaseStorageService {
       
       console.log('스토리지 경로:', storagePath);
       
-      const uploadResult: UploadResult = await uploadBytes(storageRef, blob);
+      const uploadResult: UploadResult = await uploadBytes(storageRef, blob, {
+        contentType: blob.type || 'image/jpeg',
+      });
       console.log('업로드 완료:', uploadResult.metadata.fullPath);
       
       const downloadURL = await getDownloadURL(uploadResult.ref);
@@ -334,7 +336,9 @@ class FirebaseStorageService {
       
       console.log('스토리지 경로:', storagePath);
       
-      const uploadResult: UploadResult = await uploadBytes(storageRef, blob);
+      const uploadResult: UploadResult = await uploadBytes(storageRef, blob, {
+        contentType: blob.type || 'image/jpeg',
+      });
       console.log('업로드 완료:', uploadResult.metadata.fullPath);
       
       const downloadURL = await getDownloadURL(uploadResult.ref);

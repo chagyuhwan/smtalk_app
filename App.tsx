@@ -1,3 +1,5 @@
+// 프로덕션 로그 정리 (반드시 가장 먼저 실행)
+import './utils/setupLogging';
 import { Platform, View, Text, StyleSheet } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import AppNavigator from './navigation/AppNavigator';

@@ -7,10 +7,60 @@
 
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 require('dotenv').config();
 const security = require('./security');
 const admin = require('firebase-admin');
 const { google } = require('googleapis');
+const crypto = require('crypto');
+
+// CI 기반 안정 UID 생성용 도메인 분리 솔트 (변경 금지: 변경 시 기존 계정과 매칭 불가)
+const NICE_UID_SALT = process.env.NICE_UID_SALT || 'smtalk-nice-v1';
+
+/**
+ * NICE CI(개인 고유 연결정보) 기반의 안정적 Firebase UID 생성
+ * - 같은 사람은 항상 같은 UID → 재로그인/재설치 시 동일 계정 유지
+ * - 원본 CI는 저장/반환하지 않고 해시만 사용 (개인정보 보호)
+ */
+function deriveStableUid(ci, fallbackTransactionId) {
+  if (ci) {
+    const hash = crypto
+      .createHash('sha256')
+      .update(`${NICE_UID_SALT}:${ci}`)
+      .digest('hex')
+      .substring(0, 32);
+    return `nice_${hash}`;
+  }
+  // CI가 없는 예외 상황: 기존 동작(트랜잭션 기반)으로 폴백
+  return `nice_${fallbackTransactionId}`;
+}
+
+/**
+ * NICE transaction_id 재사용 방지 (영속) - Firestore 기반
+ * - 서버 재시작/다중 인스턴스에서도 재사용을 차단한다.
+ * - Firebase Admin 미설정 시 메모리 기반(security.js)으로 폴백한다.
+ * @returns {Promise<boolean>} 최초 사용이면 true, 이미 사용된 경우 throw
+ */
+async function checkAndMarkNiceTransaction(transactionId) {
+  if (!firebaseAdmin) {
+    // 폴백: 메모리 기반 (단일 인스턴스 한정)
+    security.checkTransactionIdReuse(transactionId);
+    return true;
+  }
+
+  const db = admin.firestore();
+  const docId = crypto.createHash('sha256').update(String(transactionId)).digest('hex');
+  const ref = db.collection('niceTransactions').doc(docId);
+
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (snap.exists) {
+      throw new Error('이미 사용된 인증 정보입니다. 다시 인증해주세요.');
+    }
+    tx.set(ref, { createdAt: admin.firestore.FieldValue.serverTimestamp() });
+  });
+  return true;
+}
 
 // Firebase Admin SDK 초기화
 let firebaseAdmin = null;
@@ -46,6 +96,8 @@ const fetch = globalThis.fetch || (() => {
 })();
 
 const app = express();
+// Railway 등 리버스 프록시 뒤에서 HTTPS/X-Forwarded-Proto 인식
+app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
 const NODE_ENV = process.env.NODE_ENV || 'development';
 const isDevelopment = NODE_ENV !== 'production';
@@ -94,10 +146,107 @@ if (isDevelopment) {
 }
 
 // 미들웨어
-app.use(cors());
-app.use(express.json());
+// CORS: 허용 오리진을 환경변수로 제한 (네이티브 앱 요청은 Origin 헤더가 없어 영향 없음)
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Origin이 없는 요청(네이티브 앱, 서버 간 호출, NICE 콜백)은 허용
+    if (!origin) return callback(null, true);
+    // 허용 목록이 비어있으면(미설정) 기본적으로 허용 (운영 시 ALLOWED_ORIGINS 설정 권장)
+    if (allowedOrigins.length === 0) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error('CORS 정책에 의해 차단되었습니다.'));
+  },
+}));
+
+app.use(express.json({ limit: '1mb' }));
 // NICE API가 form-data로 POST 요청을 보낼 수 있으므로 urlencoded도 추가
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+
+// 간단한 인메모리 레이트리밋 (단일 인스턴스 기준)
+// IP+경로별 윈도우 내 요청 횟수 제한
+function createRateLimiter({ windowMs, max }) {
+  const hits = new Map();
+  // 주기적으로 만료 항목 정리
+  setInterval(() => {
+    const now = Date.now();
+    for (const [key, entry] of hits) {
+      if (now - entry.start > windowMs) hits.delete(key);
+    }
+  }, windowMs).unref?.();
+
+  return (req, res, next) => {
+    const ip = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.ip || 'unknown';
+    const key = `${ip}:${req.path}`;
+    const now = Date.now();
+    const entry = hits.get(key);
+
+    if (!entry || now - entry.start > windowMs) {
+      hits.set(key, { count: 1, start: now });
+      return next();
+    }
+
+    entry.count += 1;
+    if (entry.count > max) {
+      return res.status(429).json({
+        success: false,
+        error: '요청이 너무 많습니다. 잠시 후 다시 시도해주세요.',
+      });
+    }
+    next();
+  };
+}
+
+// 인증/결제 엔드포인트에 레이트리밋 적용 (남용/토큰 쿼터 소진 방지)
+app.use('/api/nice', createRateLimiter({ windowMs: 60 * 1000, max: 20 }));
+app.use('/api/iap', createRateLimiter({ windowMs: 60 * 1000, max: 30 }));
+app.use('/api/points', createRateLimiter({ windowMs: 60 * 1000, max: 30 }));
+
+/**
+ * Firebase ID 토큰 검증 미들웨어
+ * Authorization: Bearer <idToken> 헤더에서 토큰을 검증하고 req.uid를 설정한다.
+ */
+async function verifyFirebaseToken(req, res, next) {
+  if (!firebaseAdmin) {
+    return res.status(503).json({ success: false, error: '서버 인증이 구성되지 않았습니다.' });
+  }
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  if (!token) {
+    return res.status(401).json({ success: false, error: '인증 토큰이 필요합니다.' });
+  }
+  try {
+    req.firebaseToken = await admin.auth().verifyIdToken(token);
+    req.uid = req.firebaseToken.uid;
+    next();
+  } catch (e) {
+    return res.status(401).json({ success: false, error: '유효하지 않은 인증 토큰입니다.' });
+  }
+}
+
+// 한국 시간(KST, UTC+9) 기준 날짜 문자열 (YYYY-MM-DD)
+function kstDateString() {
+  const now = new Date();
+  const kst = new Date(now.getTime() + (9 * 60 + now.getTimezoneOffset()) * 60000);
+  return kst.toISOString().split('T')[0];
+}
+
+/**
+ * 포인트 보상 규칙 (서버 권위)
+ * - dailyField: 하루 1회 제한(해당 날짜 필드와 오늘이 같으면 중복)
+ * - onceField: 1회 제한(플래그가 true면 중복)
+ * - anonymousOnly: 익명 로그인(심사 데모)만 허용
+ */
+const REWARD_RULES = {
+  'attendance': { amount: 50, dailyField: 'lastAttendanceDate' },
+  'post-reward': { amount: 50, dailyField: 'lastPostRewardDate' },
+  'signup-bonus': { amount: 100, onceField: 'signupBonusGranted' },
+  'reviewer-demo': { amount: 10000, onceField: 'reviewerDemoGranted', anonymousOnly: true },
+};
 
 // Base64UrlEncoding 구현
 function base64UrlEncode(str) {
@@ -138,20 +287,20 @@ app.post('/api/nice/token', async (req, res) => {
     // 고유한 요청 번호 생성
     const requestNo = generateRequestNo(NICE_CONFIG.clientId);
     
-    console.log('[NICE] 접근 토큰 발급 요청:', url);
-    console.log('[NICE] Client ID:', NICE_CONFIG.clientId);
-    console.log('[NICE] Request No:', requestNo);
-    
-    // 현재 서버의 공인 IP 확인 (디버깅용)
-    try {
-      const ipCheck = await fetch('https://api.ipify.org?format=json');
-      const ipData = await ipCheck.json();
-      console.log('[NICE] 현재 서버 공인 IP:', ipData.ip);
-      console.log('[NICE] ⚠️  이 IP가 NICE 관리 페이지에 등록되어 있는지 확인하세요!');
-    } catch (ipError) {
-      console.log('[NICE] IP 확인 실패 (무시 가능)');
+    if (isDevelopment) {
+      console.log('[NICE] 접근 토큰 발급 요청:', url);
+      console.log('[NICE] Request No:', requestNo);
+
+      // 현재 서버의 공인 IP 확인 (개발 디버깅용)
+      try {
+        const ipCheck = await fetch('https://api.ipify.org?format=json');
+        const ipData = await ipCheck.json();
+        console.log('[NICE] 현재 서버 공인 IP:', ipData.ip);
+      } catch (ipError) {
+        console.log('[NICE] IP 확인 실패 (무시 가능)');
+      }
     }
-    
+
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -233,11 +382,12 @@ app.post('/api/nice/token', async (req, res) => {
               `- IP 등록 후에도 오류가 계속되면 NICE 담당자에게 직접 문의하세요`;
           }
           
+          // 프로덕션에서는 내부 정보(Client ID/서버 IP) 비노출, 일반 메시지만 전달
           return res.status(response.status).json({
             success: false,
-            error: errorMessage,
+            error: isDevelopment ? errorMessage : '인증 토큰 발급에 실패했습니다. 잠시 후 다시 시도해주세요.',
             result_code: errorData.result_code,
-            current_ip: currentIP,
+            ...(isDevelopment ? { current_ip: currentIP } : {}),
           });
         } catch {
           return res.status(response.status).json({
@@ -328,12 +478,6 @@ app.post('/api/nice/auth-url', async (req, res) => {
     returnUrl = `${backendBaseUrl}/api/nice/callback`;
     closeUrl = `${backendBaseUrl}/api/nice/close`;
     
-    // 항상 로깅 (오류 디버깅용)
-    console.log('[NICE] 인증 URL 요청:', url);
-    console.log('[NICE] return_url:', returnUrl);
-    console.log('[NICE] close_url:', closeUrl);
-    console.log('[NICE] BACKEND_BASE_URL:', process.env.BACKEND_BASE_URL || '설정되지 않음');
-    
     const requestBody = {
       request_no: requestNo,
       return_url: returnUrl,
@@ -342,9 +486,13 @@ app.post('/api/nice/auth-url', async (req, res) => {
       method_type: 'GET',
       exp_mods: ['closeButtonOn'],
     };
-    
-    console.log('[NICE] 인증 URL 요청 본문:', JSON.stringify(requestBody, null, 2));
-    
+
+    if (isDevelopment) {
+      console.log('[NICE] 인증 URL 요청:', url);
+      console.log('[NICE] return_url:', returnUrl);
+      console.log('[NICE] 인증 URL 요청 본문:', JSON.stringify(requestBody, null, 2));
+    }
+
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -357,11 +505,10 @@ app.post('/api/nice/auth-url', async (req, res) => {
     });
 
     const responseText = await response.text();
-    // 항상 응답 로깅 (디버깅용) - 매우 중요!
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log('[NICE] 인증 URL 응답 상태:', response.status);
-    console.log('[NICE] 인증 URL 응답 본문:', responseText);
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    if (isDevelopment) {
+      console.log('[NICE] 인증 URL 응답 상태:', response.status);
+      console.log('[NICE] 인증 URL 응답 본문:', responseText);
+    }
 
     if (!response.ok) {
       try {
@@ -399,28 +546,9 @@ app.post('/api/nice/auth-url', async (req, res) => {
         full_response: data,
       });
       
-      // "요청하신 사이트 정보가 올바르지 않습니다" 오류 처리
-      let errorMessage = data.result_message || '인증 URL 요청에 실패했습니다.';
-      if (data.result_message && data.result_message.includes('사이트 정보')) {
-        errorMessage = `요청하신 사이트 정보가 올바르지 않습니다.\n\n` +
-          `오류 코드: ${data.result_code}\n` +
-          `오류 메시지: ${data.result_message}\n` +
-          `현재 return_url: ${returnUrl}\n\n` +
-          `⚠️ 중요: Return URL은 관리 페이지에 등록하지 않고 API 요청 시 파라미터로 전달합니다.\n\n` +
-          `가능한 원인:\n` +
-          `1. 서비스 신청 시 도메인 등록 필요\n` +
-          `   - NICE 관리 페이지 > 서비스 관리 > 도메인 등록\n` +
-          `   - 도메인: hailee-unannihilated-metempirically.ngrok-free.dev\n\n` +
-          `2. IP 화이트리스트 등록 필요\n` +
-          `   - NICE 관리 페이지 > IP 등록\n` +
-          `   - 서버 공인 IP: 211.178.123.241\n\n` +
-          `3. NICE 고객 지원 문의\n` +
-          `   - 이메일: niceid_support@nice.co.kr\n` +
-          `   - 전화: 02-2122-4872~3\n` +
-          `   - Client ID: NI3e27f2e2-2bae-4d2e-93d4-e477e915763b\n\n` +
-          `자세한 내용은 backend/NICE_TROUBLESHOOTING.md 파일을 참고하세요.`;
-      }
-      
+      // 클라이언트에는 일반화된 메시지만 전달 (내부 IP/도메인/Client ID 비노출)
+      const errorMessage = '본인인증 요청에 실패했습니다. 잠시 후 다시 시도해주세요.';
+
       return res.status(400).json({
         success: false,
         error: errorMessage,
@@ -521,12 +649,12 @@ app.post('/api/nice/auth-result', async (req, res) => {
       di: data.di || null, // 중복가입 확인 DI (민감정보)
     };
 
-    // 보안: Transaction ID 재사용 방지
+    // 보안: Transaction ID 재사용 방지 (Firestore 영속)
     if (verified && transaction_id) {
       try {
-        security.checkTransactionIdReuse(transaction_id);
+        await checkAndMarkNiceTransaction(transaction_id);
       } catch (reuseError) {
-        console.error('[NICE] ❌ Transaction ID 재사용 시도:', transaction_id);
+        console.error('[NICE] ❌ Transaction ID 재사용 시도 차단');
         return res.status(400).json({
           success: false,
           error: reuseError.message,
@@ -544,15 +672,17 @@ app.post('/api/nice/auth-result', async (req, res) => {
     }
 
     // Firebase Custom Token 발급 (인증 성공 시)
+    // 보안/영속성: CI(개인 고유값) 해시 기반의 안정 UID 사용 → 재로그인 시 동일 계정 유지
     let customToken = null;
+    let resolvedUid = null;
     if (verified && firebaseAdmin) {
       try {
-        const uid = `nice_${transaction_id}`;
-        customToken = await admin.auth().createCustomToken(uid, {
+        resolvedUid = deriveStableUid(rawUserInfo.ci, transaction_id);
+        customToken = await admin.auth().createCustomToken(resolvedUid, {
           provider: 'nice',
           phoneNumber: userInfo.mobile_no || null,
         });
-        console.log('[NICE] Firebase Custom Token 발급 성공 (uid:', uid, ')');
+        console.log('[NICE] Firebase Custom Token 발급 성공 (uid:', resolvedUid, ')');
       } catch (tokenError) {
         console.error('[NICE] Firebase Custom Token 발급 실패:', tokenError.message);
       }
@@ -563,6 +693,7 @@ app.post('/api/nice/auth-result', async (req, res) => {
       success: true,
       verified: verified,
       customToken: customToken,
+      uid: resolvedUid,
       data: {
         // 원본 데이터에서 CI/DI 제외
         ...Object.fromEntries(
@@ -595,29 +726,16 @@ app.post('/api/nice/auth-result', async (req, res) => {
  */
 const handleNiceCallback = (req, res) => {
   try {
-    // 상세 로깅 (디버깅용) - 매우 중요!
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log('[NICE] 콜백 요청 수신:', {
-      method: req.method,
-      url: req.url,
-      query: req.query,
-      body: req.body,
-      headers: {
-        'content-type': req.headers['content-type'],
-        'user-agent': req.headers['user-agent'],
-      },
-    });
-    console.log('[NICE] 전체 요청 객체:', JSON.stringify({
-      method: req.method,
-      originalUrl: req.originalUrl,
-      url: req.url,
-      query: req.query,
-      params: req.params,
-      body: req.body,
-      headers: req.headers,
-    }, null, 2));
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    
+    // 상세 요청 로깅은 개발 환경에서만 (민감정보 노출 방지)
+    if (isDevelopment) {
+      console.log('[NICE] 콜백 요청 수신:', {
+        method: req.method,
+        url: req.url,
+        query: req.query,
+        body: req.body,
+      });
+    }
+
     // GET 요청: 쿼리 파라미터에서 가져오기
     // POST 요청: body 또는 쿼리 파라미터에서 가져오기
     // NICE API가 다양한 파라미터 이름을 사용할 수 있으므로 모두 확인
@@ -777,7 +895,70 @@ app.get('/api/nice/close', (req, res) => {
 });
 
 /**
- * IAP Google Play 영수증 서버 검증
+ * 상품 ID → 지급 포인트 (서버 권위 매핑)
+ * 클라이언트가 보낸 포인트 값을 신뢰하지 않고 서버에서 결정한다.
+ */
+const PRODUCT_POINTS = {
+  'com.randomchat.points.1000': 1000,
+  'com.randomchat.points.3000': 3000,
+  'com.randomchat.points.5000': 5000,
+  'com.randomchat.points.10000': 10000,
+  'com.randomchat.points.30000': 30000,
+  'com.randomchat.points.50000': 50000,
+};
+
+/**
+ * 검증된 구매에 대해 서버에서 포인트를 적립한다. (중복 적립 방지 + 원자적 처리)
+ * - 거래 ID 해시를 purchases 문서 ID로 사용하여 멱등성 보장
+ * - users 문서의 points를 트랜잭션으로 증가
+ */
+async function creditPointsForPurchase({ userId, productId, transactionId, platform, orderId }) {
+  const points = PRODUCT_POINTS[productId];
+  if (!points) {
+    throw new Error(`알 수 없는 상품입니다: ${productId}`);
+  }
+  if (!firebaseAdmin) {
+    throw new Error('서버 구성 오류: Firebase Admin이 초기화되지 않았습니다.');
+  }
+
+  const db = admin.firestore();
+  const purchaseDocId = crypto.createHash('sha256').update(String(transactionId)).digest('hex');
+  const purchaseRef = db.collection('purchases').doc(purchaseDocId);
+  const userRef = db.collection('users').doc(userId);
+
+  return db.runTransaction(async (tx) => {
+    const purchaseSnap = await tx.get(purchaseRef);
+    const userSnap = await tx.get(userRef);
+    const currentBalance = userSnap.exists ? (userSnap.data().points || 0) : 0;
+
+    // 이미 처리된 거래면 중복 적립하지 않음
+    if (purchaseSnap.exists) {
+      return { alreadyProcessed: true, creditedPoints: 0, newBalance: currentBalance };
+    }
+
+    const newBalance = currentBalance + points;
+    tx.set(userRef, {
+      points: newBalance,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    tx.set(purchaseRef, {
+      userId,
+      productId,
+      points,
+      transactionId: String(transactionId),
+      orderId: orderId || null,
+      platform,
+      verified: true,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    return { alreadyProcessed: false, creditedPoints: points, newBalance };
+  });
+}
+
+/**
+ * IAP Google Play 영수증 서버 검증 + 포인트 적립
  * POST /api/iap/verify-android
  */
 app.post('/api/iap/verify-android', async (req, res) => {
@@ -788,12 +969,17 @@ app.post('/api/iap/verify-android', async (req, res) => {
       return res.status(400).json({ success: false, error: '필수 파라미터 누락 (packageName, productId, purchaseToken, userId)' });
     }
 
+    if (!PRODUCT_POINTS[productId]) {
+      return res.status(400).json({ success: false, verified: false, error: '유효하지 않은 상품입니다.' });
+    }
+
     const gPlayClientEmail = process.env.GOOGLE_PLAY_CLIENT_EMAIL;
     const gPlayPrivateKey = process.env.GOOGLE_PLAY_PRIVATE_KEY?.replace(/\\n/g, '\n');
 
+    // 보안: 서비스 계정 미설정 시 검증 실패 처리 (구매 허용 금지)
     if (!gPlayClientEmail || !gPlayPrivateKey) {
-      console.warn('[IAP] Google Play 서비스 계정 미설정 - 검증 건너뜀');
-      return res.json({ success: true, verified: false, error: 'Google Play 서비스 계정이 설정되지 않았습니다.' });
+      console.error('[IAP] Google Play 서비스 계정 미설정 - 검증 불가');
+      return res.status(503).json({ success: false, verified: false, error: '결제 검증 서버가 아직 구성되지 않았습니다. 잠시 후 다시 시도해주세요.' });
     }
 
     const auth = new google.auth.GoogleAuth({
@@ -810,47 +996,203 @@ app.post('/api/iap/verify-android', async (req, res) => {
     });
 
     const purchase = response.data;
-    // purchaseState: 0 = 구매됨, 1 = 취소됨
+    // purchaseState: 0 = 구매됨, 1 = 취소됨, 2 = 보류중
     const isValid = purchase.purchaseState === 0 || purchase.purchaseState === undefined;
-    // consumptionState: 0 = 미소비, 1 = 소비됨
-    const isConsumed = purchase.consumptionState === 1;
-
-    console.log('[IAP] Google Play 검증 결과:', {
-      productId,
-      purchaseState: purchase.purchaseState,
-      consumptionState: purchase.consumptionState,
-      orderId: purchase.orderId,
-      isValid,
-      isConsumed,
-    });
 
     if (!isValid) {
-      return res.json({ success: true, verified: false, error: '취소된 구매입니다.', purchaseState: purchase.purchaseState });
+      return res.json({ success: true, verified: false, error: '완료되지 않았거나 취소된 구매입니다.', purchaseState: purchase.purchaseState });
     }
 
-    if (isConsumed) {
-      return res.json({ success: true, verified: false, error: '이미 소비된 구매입니다.' });
-    }
+    // 검증 성공 → 서버에서 포인트 적립 (멱등)
+    const credit = await creditPointsForPurchase({
+      userId,
+      productId,
+      transactionId: purchaseToken,
+      platform: 'android',
+      orderId: purchase.orderId,
+    });
+
+    console.log('[IAP] Android 검증/적립 완료:', { productId, orderId: purchase.orderId, ...credit });
 
     return res.json({
       success: true,
       verified: true,
       orderId: purchase.orderId,
-      purchaseTimeMillis: purchase.purchaseTimeMillis,
+      ...credit,
     });
   } catch (error) {
     console.error('[IAP] Google Play 검증 오류:', error.message);
-    // Google API 오류 코드별 처리
+    // 보안: 권한 미설정(401/403)이어도 구매를 허용하지 않고 실패 처리
     if (error.code === 401 || error.code === 403) {
-      // Play Console API 액세스 미설정 상태 - 앱 출시 후 서비스 계정 연결 필요
-      // 임시로 구매 허용 처리 (연결 후 strict 모드로 변경)
-      console.warn('[IAP] Google Play API 권한 미설정 - 임시 허용 처리');
-      return res.json({ success: true, verified: true, orderId: null, note: 'play_api_not_linked' });
+      return res.status(503).json({ success: false, verified: false, error: '결제 검증 서버 권한이 아직 구성되지 않았습니다.' });
     }
     if (error.code === 404) {
-      return res.status(400).json({ success: false, error: '유효하지 않은 구매 토큰입니다.' });
+      return res.status(400).json({ success: false, verified: false, error: '유효하지 않은 구매 토큰입니다.' });
     }
+    return res.status(500).json({ success: false, verified: false, error: error.message });
+  }
+});
+
+/**
+ * Apple 영수증 검증 (프로덕션 → 샌드박스 폴백)
+ */
+async function verifyAppleReceipt(receiptData) {
+  const body = JSON.stringify({
+    'receipt-data': receiptData,
+    'password': process.env.APPLE_SHARED_SECRET || undefined,
+    'exclude-old-transactions': true,
+  });
+
+  const post = async (url) => {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    });
+    return r.json();
+  };
+
+  let data = await post('https://buy.itunes.apple.com/verifyReceipt');
+  // 21007: 샌드박스 영수증을 프로덕션으로 보낸 경우 → 샌드박스로 재시도
+  if (data && data.status === 21007) {
+    data = await post('https://sandbox.itunes.apple.com/verifyReceipt');
+  }
+  return data;
+}
+
+/**
+ * IAP Apple App Store 영수증 서버 검증 + 포인트 적립
+ * POST /api/iap/verify-ios
+ */
+app.post('/api/iap/verify-ios', async (req, res) => {
+  try {
+    const { productId, transactionId, receipt, userId } = req.body;
+
+    if (!productId || !receipt || !userId) {
+      return res.status(400).json({ success: false, error: '필수 파라미터 누락 (productId, receipt, userId)' });
+    }
+
+    if (!PRODUCT_POINTS[productId]) {
+      return res.status(400).json({ success: false, verified: false, error: '유효하지 않은 상품입니다.' });
+    }
+
+    const data = await verifyAppleReceipt(receipt);
+
+    // status 0 = 정상 영수증
+    if (!data || data.status !== 0) {
+      console.error('[IAP] Apple 영수증 검증 실패. status:', data && data.status);
+      return res.json({ success: true, verified: false, error: `영수증 검증 실패 (status: ${data ? data.status : 'unknown'})` });
+    }
+
+    // 영수증의 in_app 목록에서 해당 상품/거래 확인
+    const inApp = (data.receipt && data.receipt.in_app) || data.latest_receipt_info || [];
+    const match = inApp.find((item) =>
+      item.product_id === productId &&
+      (!transactionId || item.transaction_id === transactionId || item.original_transaction_id === transactionId)
+    ) || inApp.find((item) => item.product_id === productId);
+
+    if (!match) {
+      return res.json({ success: true, verified: false, error: '영수증에서 해당 상품 구매 내역을 찾을 수 없습니다.' });
+    }
+
+    // 멱등성을 위한 거래 식별자 (Apple의 transaction_id 우선)
+    const txId = match.transaction_id || transactionId;
+
+    const credit = await creditPointsForPurchase({
+      userId,
+      productId,
+      transactionId: txId,
+      platform: 'ios',
+      orderId: match.original_transaction_id || null,
+    });
+
+    console.log('[IAP] iOS 검증/적립 완료:', { productId, txId, ...credit });
+
+    return res.json({
+      success: true,
+      verified: true,
+      ...credit,
+    });
+  } catch (error) {
+    console.error('[IAP] Apple 검증 오류:', error.message);
+    return res.status(500).json({ success: false, verified: false, error: error.message });
+  }
+});
+
+/**
+ * 포인트 보상 적립 (서버 권위, 멱등)
+ * POST /api/points/claim  { type: 'attendance' | 'post-reward' | 'signup-bonus' | 'reviewer-demo' }
+ * 헤더: Authorization: Bearer <Firebase ID Token>
+ */
+app.post('/api/points/claim', verifyFirebaseToken, async (req, res) => {
+  try {
+    const { type } = req.body || {};
+    const rule = REWARD_RULES[type];
+    if (!rule) {
+      return res.status(400).json({ success: false, error: '알 수 없는 보상 유형입니다.' });
+    }
+
+    // 익명 전용 보상(심사 데모) 보호
+    const provider = req.firebaseToken.firebase && req.firebaseToken.firebase.sign_in_provider;
+    if (rule.anonymousOnly && provider !== 'anonymous') {
+      return res.status(403).json({ success: false, error: '허용되지 않은 요청입니다.' });
+    }
+
+    const db = admin.firestore();
+    const userRef = db.collection('users').doc(req.uid);
+    const today = kstDateString();
+
+    const result = await db.runTransaction(async (tx) => {
+      const snap = await tx.get(userRef);
+      const data = snap.exists ? snap.data() : {};
+      const current = data.points || 0;
+
+      // 중복 적립 방지
+      if (rule.dailyField && data[rule.dailyField] === today) {
+        return { granted: false, creditedPoints: 0, newBalance: current };
+      }
+      if (rule.onceField && data[rule.onceField]) {
+        return { granted: false, creditedPoints: 0, newBalance: current };
+      }
+
+      const newBalance = current + rule.amount;
+      const update = {
+        points: newBalance,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      if (rule.dailyField) update[rule.dailyField] = today;
+      if (rule.onceField) update[rule.onceField] = true;
+
+      tx.set(userRef, update, { merge: true });
+      return { granted: true, creditedPoints: rule.amount, newBalance };
+    });
+
+    return res.json({ success: true, ...result });
+  } catch (error) {
+    console.error('[POINTS] 적립 오류:', error.message);
     return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// 정적 정책 페이지 (Railway/AWS nginx 없이도 Play Store URL로 사용 가능)
+const sendPolicyPage = (filename) => (req, res) => {
+  res.sendFile(path.join(__dirname, filename));
+};
+app.get('/privacy-policy', sendPolicyPage('privacy-policy.html'));
+app.get('/terms', sendPolicyPage('terms.html'));
+app.get('/delete-account', sendPolicyPage('delete-account.html'));
+
+// Railway/NICE 등록용: 이 서버의 실제 아웃바운드(외부) IP 확인
+app.get('/api/outbound-ip', async (req, res) => {
+  try {
+    const ipResponse = await fetch('https://api.ipify.org?format=json');
+    const ipData = await ipResponse.json();
+    res.json({
+      outbound_ip: ipData.ip,
+      note: 'NICE 관리 페이지 > IP 주소 등록에 위 IP를 추가하세요. Railway는 IP가 바뀔 수 있어 Pro 플랜 Static IP 권장.',
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'IP 확인 실패' });
   }
 });
 

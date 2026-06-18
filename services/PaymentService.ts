@@ -1,6 +1,5 @@
 import { Platform, Alert } from 'react-native';
 import { auth } from '../config/firebase';
-import { firebaseFirestoreService } from './FirebaseFirestoreService';
 
 // Expo Go에서는 react-native-iap를 사용할 수 없으므로 조건부 import
 let RNIap: any = null;
@@ -40,6 +39,9 @@ const PRODUCT_IDS = {
   ],
 };
 
+// 앱 패키지명/번들 ID (app.json과 일치해야 함)
+const PACKAGE_NAME = 'com.kanc.randomchat';
+
 // 포인트 금액과 상품 ID 매핑
 export const POINT_PRODUCT_MAP: Record<number, string> = {
   1000: Platform.OS === 'ios' ? PRODUCT_IDS.ios[0] : PRODUCT_IDS.android[0],
@@ -52,7 +54,7 @@ export const POINT_PRODUCT_MAP: Record<number, string> = {
 
 class PaymentService {
   private initialized = false;
-  private products: RNIap.Product[] = [];
+  private products: any[] = [];
   private purchaseUpdateSubscription: any = null;
   private purchaseErrorSubscription: any = null;
 
@@ -117,6 +119,28 @@ class PaymentService {
   }
 
   /**
+   * 소비성 상품(포인트) 거래 종료
+   * Android는 반드시 소비(consume) 처리해야 같은 상품을 다시 구매할 수 있다.
+   * react-native-iap 버전별 시그니처 차이를 흡수하기 위해 폴백을 둔다.
+   */
+  private async finishConsumable(purchase: any): Promise<void> {
+    if (!RNIap) return;
+    try {
+      // v14 객체 시그니처
+      await RNIap.finishTransaction({ purchase, isConsumable: true });
+    } catch (e) {
+      try {
+        // 구버전 폴백 (positional)
+        await RNIap.finishTransaction(purchase, true);
+      } catch {
+        try {
+          await RNIap.finishTransaction(purchase);
+        } catch { /* 무시 */ }
+      }
+    }
+  }
+
+  /**
    * 구매 업데이트 및 에러 리스너 설정
    */
   private setupPurchaseListeners() {
@@ -125,99 +149,43 @@ class PaymentService {
     // 구매 업데이트 리스너
     this.purchaseUpdateSubscription = RNIap.purchaseUpdatedListener(
       async (purchase: any) => {
-        console.log('구매 업데이트:', purchase);
-        
+        console.log('구매 업데이트 수신');
+
         try {
           const firebaseUser = auth.currentUser;
           if (!firebaseUser) {
             Alert.alert('오류', '로그인이 필요합니다.');
-            await RNIap.finishTransaction(purchase);
+            await this.finishConsumable(purchase);
             return;
           }
 
-          // 거래 ID 추출 (플랫폼별로 다름)
-          let transactionId: string | null = null;
-          if (Platform.OS === 'ios') {
-            // iOS: transactionIdentifier 또는 transactionReceipt 사용
-            transactionId = purchase.transactionIdentifier || purchase.transactionReceipt || purchase.transactionId;
-          } else if (Platform.OS === 'android') {
-            // Android: purchaseToken 사용
-            transactionId = purchase.purchaseToken || purchase.transactionId;
-          }
-          
-          if (!transactionId) {
-            console.error('거래 ID를 찾을 수 없습니다:', purchase);
-            Alert.alert('오류', '거래 정보를 찾을 수 없습니다.');
-            await RNIap.finishTransaction(purchase);
+          // 서버 영수증 검증 + 포인트 적립 (서버가 권위, 멱등 처리)
+          const result = await this.verifyAndCredit(purchase, firebaseUser.uid);
+
+          // 검증 성공 여부와 무관하게 거래는 종료/소비 처리 (소비형 상품)
+          await this.finishConsumable(purchase);
+
+          if (!result.verified) {
+            Alert.alert('오류', result.error || '결제 검증에 실패했습니다. 결제가 정상 처리되지 않았다면 고객센터로 문의해주세요.');
             return;
           }
 
-          // 중복 구매 확인
-          const existingPurchase = await firebaseFirestoreService.getPurchaseByTransactionId(transactionId);
-          if (existingPurchase) {
-            console.log('이미 처리된 구매입니다:', transactionId);
-            // 이미 처리된 구매이므로 완료 처리만 하고 포인트는 추가하지 않음
-            await RNIap.finishTransaction(purchase);
-            Alert.alert('알림', '이미 처리된 구매입니다.');
-            return;
+          // Analytics: 포인트 충전 (실패해도 무시)
+          try {
+            const { analyticsService } = await import('./AnalyticsService');
+            const credited = result.creditedPoints || 0;
+            analyticsService.logPurchase(credited, credited * 10, 'KRW');
+          } catch (error) {
+            console.error('Analytics 로깅 실패:', error);
           }
 
-          // 영수증 검증 (실제로는 서버에서 검증해야 함)
-          const valid = await this.verifyReceipt(purchase);
-          
-          if (valid) {
-            // 포인트 금액 계산
-            const points = this.getPointsFromProductId(purchase.productId);
-            if (!points) {
-              Alert.alert('오류', '유효하지 않은 상품입니다.');
-              await RNIap.finishTransaction(purchase);
-              return;
-            }
-
-            // 구매 이력 저장
-            const purchaseId = `purchase_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-            try {
-              await firebaseFirestoreService.createPurchase({
-                id: purchaseId,
-                userId: firebaseUser.uid,
-                productId: purchase.productId,
-                points: points,
-                transactionId: transactionId,
-                transactionReceipt: purchase.transactionReceipt,
-                purchaseToken: purchase.purchaseToken,
-                platform: Platform.OS as 'ios' | 'android',
-                timestamp: Date.now(),
-                verified: valid,
-              });
-              console.log('구매 이력 저장 완료:', purchaseId);
-            } catch (error: any) {
-              console.error('구매 이력 저장 실패:', error);
-              // 구매 이력 저장 실패해도 포인트는 추가 (나중에 수동으로 확인 가능)
-            }
-
-            // 구매 완료 처리
-            await RNIap.finishTransaction(purchase);
-            
-            // Analytics: 포인트 충전
-            try {
-              const { analyticsService } = await import('./AnalyticsService');
-              // 상품 ID에서 포인트 금액 추정 (실제로는 상품 정보에서 가져와야 함)
-              const estimatedAmount = points * 10; // 예시: 1포인트 = 10원 가정
-              analyticsService.logPurchase(points, estimatedAmount, 'KRW');
-            } catch (error) {
-              console.error('Analytics 로깅 실패:', error);
-            }
-            
-            // 콜백으로 포인트 추가 알림
-            if (this.onPurchaseSuccess) {
-              this.onPurchaseSuccess(points, purchase);
-            }
-          } else {
-            Alert.alert('오류', '영수증 검증에 실패했습니다.');
-            await RNIap.finishTransaction(purchase);
+          // 포인트 잔액은 Firestore 실시간 구독으로 자동 반영됨
+          if (this.onPurchaseSuccess) {
+            this.onPurchaseSuccess(result.creditedPoints || 0, purchase);
           }
         } catch (error: any) {
           console.error('구매 처리 오류:', error);
+          await this.finishConsumable(purchase);
           Alert.alert('오류', `구매 처리 중 오류가 발생했습니다: ${error.message}`);
         }
       }
@@ -239,79 +207,81 @@ class PaymentService {
   }
 
   /**
-   * 영수증 서버 검증
+   * 서버 영수증 검증 + 포인트 적립
+   *
+   * 보안 원칙:
+   * - 영수증 검증과 포인트 적립은 전적으로 백엔드 서버에서 수행한다.
+   * - 백엔드 URL이 없거나 검증 실패 시 절대 통과(적립)시키지 않는다(fail-closed).
    */
-  private async verifyReceipt(purchase: any): Promise<boolean> {
+  private async verifyAndCredit(
+    purchase: any,
+    userId: string
+  ): Promise<{ verified: boolean; creditedPoints?: number; newBalance?: number; error?: string }> {
+    const backendUrl = process.env.EXPO_PUBLIC_NICE_BACKEND_URL;
+    if (!backendUrl) {
+      console.error('[IAP] 백엔드 URL 미설정 - 결제 검증 불가');
+      return { verified: false, error: '결제 검증 서버가 설정되지 않았습니다.' };
+    }
+
     try {
-      if (!RNIap) return false;
+      let endpoint = '';
+      let body: Record<string, any> = {};
 
       if (Platform.OS === 'android') {
         if (!purchase.purchaseToken) {
-          console.warn('Android: 구매 토큰이 없습니다.');
-          return false;
+          return { verified: false, error: 'Android 구매 토큰이 없습니다.' };
         }
-
-        const backendUrl = process.env.EXPO_PUBLIC_NICE_BACKEND_URL;
-        if (!backendUrl) {
-          console.warn('[IAP] 백엔드 URL 미설정 - 클라이언트 검증으로 폴백');
-          return true;
+        endpoint = `${backendUrl}/api/iap/verify-android`;
+        body = {
+          packageName: PACKAGE_NAME,
+          productId: purchase.productId,
+          purchaseToken: purchase.purchaseToken,
+          userId,
+        };
+      } else if (Platform.OS === 'ios') {
+        const receipt = purchase.transactionReceipt;
+        if (!receipt) {
+          return { verified: false, error: 'iOS 영수증 정보가 없습니다.' };
         }
-
-        const firebaseUser = auth.currentUser;
-        const response = await fetch(`${backendUrl}/api/iap/verify-android`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            packageName: 'com.kanc.randomchat',
-            productId: purchase.productId,
-            purchaseToken: purchase.purchaseToken,
-            userId: firebaseUser?.uid || '',
-          }),
-        });
-
-        const data = await response.json();
-        console.log('[IAP] 서버 검증 결과:', data);
-
-        if (!data.success) {
-          console.error('[IAP] 서버 검증 실패:', data.error);
-          return false;
-        }
-
-        return data.verified === true;
+        endpoint = `${backendUrl}/api/iap/verify-ios`;
+        body = {
+          productId: purchase.productId,
+          transactionId: purchase.transactionId || purchase.transactionIdentifier,
+          receipt,
+          userId,
+        };
+      } else {
+        return { verified: false, error: '지원하지 않는 플랫폼입니다.' };
       }
 
-      // iOS - transactionReceipt 존재 여부 확인 (추후 Apple 서버 검증 추가 가능)
-      if (Platform.OS === 'ios') {
-        if (!purchase.transactionReceipt && !purchase.transactionIdentifier) {
-          console.warn('iOS: 영수증 정보가 없습니다.');
-          return false;
-        }
-        return true;
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+      const data = await response.json();
+      console.log('[IAP] 서버 검증 결과:', { verified: data.verified, alreadyProcessed: data.alreadyProcessed });
+
+      if (!data.success || data.verified !== true) {
+        return { verified: false, error: data.error || '서버 검증에 실패했습니다.' };
       }
 
-      return false;
-    } catch (error) {
-      console.error('영수증 검증 오류:', error);
-      return false;
+      return {
+        verified: true,
+        creditedPoints: data.creditedPoints,
+        newBalance: data.newBalance,
+      };
+    } catch (error: any) {
+      console.error('[IAP] 서버 검증 오류:', error);
+      return { verified: false, error: error.message || '결제 검증 중 오류가 발생했습니다.' };
     }
-  }
-
-  /**
-   * 상품 ID로부터 포인트 금액 가져오기
-   */
-  private getPointsFromProductId(productId: string): number | null {
-    for (const [points, id] of Object.entries(POINT_PRODUCT_MAP)) {
-      if (id === productId) {
-        return parseInt(points, 10);
-      }
-    }
-    return null;
   }
 
   /**
    * 에러 메시지 변환
    */
-  private getErrorMessage(error: RNIap.PurchaseError): string {
+  private getErrorMessage(error: any): string {
     switch (error.code) {
       case 'E_USER_CANCELLED':
         return '구매가 취소되었습니다.';

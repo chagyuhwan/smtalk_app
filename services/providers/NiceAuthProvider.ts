@@ -24,11 +24,9 @@ export class NiceAuthProvider implements IAuthProvider {
   // 백엔드 프록시 서버 URL
   private backendUrl = NICE_CONFIG.backendUrl;
   
-  // NICE API 설정 (참고용, 실제로는 백엔드에서 사용)
+  // NICE API 설정 (참고용, 실제 호출 및 Client ID/Secret 사용은 백엔드에서 수행)
   private baseUrl = NICE_CONFIG.baseUrl;
   private version = NICE_CONFIG.version;
-  private clientId = NICE_CONFIG.clientId;
-  private secretKey = NICE_CONFIG.secretKey;
   private devLang = NICE_CONFIG.devLang;
   
   // 접근 토큰 캐시 (24시간 유효)
@@ -37,30 +35,6 @@ export class NiceAuthProvider implements IAuthProvider {
   
   // 인증 세션 정보
   private authSession: NiceAuthSession | null = null;
-
-  /**
-   * Base64UrlEncoding 구현
-   * Base64.getUrlEncoder().withoutPadding()과 동일한 동작
-   */
-  private base64UrlEncode(str: string): string {
-    // Base64 인코딩
-    const base64 = btoa(str);
-    // URL-safe 변환: + -> -, / -> _, = 제거
-    return base64
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=/g, '');
-  }
-
-  /**
-   * 고유한 요청 번호 생성 (20-50 byte)
-   */
-  private generateRequestNo(): string {
-    // 타임스탬프 + 랜덤 문자열로 고유 번호 생성
-    const timestamp = Date.now();
-    const random = Math.random().toString(36).substring(2, 15);
-    return `${this.clientId}_${timestamp}_${random}`.substring(0, 50);
-  }
 
   /**
    * 전화번호 형식 검증
@@ -298,7 +272,9 @@ export class NiceAuthProvider implements IAuthProvider {
       }
 
       // 인증 성공 시 사용자 정보 생성
-      const userId = `nice_${session.transactionId}`;
+      // UID는 백엔드가 CI 해시로 생성한 안정 식별자를 사용 (재로그인 시 동일 계정 유지)
+      // 백엔드 uid가 없는 예외 상황에만 트랜잭션 기반으로 폴백
+      const userId = result.uid || `nice_${session.transactionId}`;
       const phoneNumber = result.phoneNumber || session.phoneNumber || null;
       
       // 인증된 사용자 정보를 AsyncStorage에 저장 (getCurrentUser에서 사용)
@@ -353,6 +329,7 @@ export class NiceAuthProvider implements IAuthProvider {
     message?: string;
     phoneNumber?: string;
     customToken?: string;
+    uid?: string;
   }> {
     try {
       const url = `${this.backendUrl}/api/nice/auth-result`;
@@ -408,6 +385,7 @@ export class NiceAuthProvider implements IAuthProvider {
         verified: data.verified || false,
         phoneNumber: phoneNumber,
         customToken: data.customToken || undefined,
+        uid: data.uid || undefined,
         message: data.message || '본인인증이 완료되었습니다.',
       };
     } catch (error: any) {

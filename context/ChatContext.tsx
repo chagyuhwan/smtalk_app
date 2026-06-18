@@ -9,6 +9,7 @@ import { auth } from '../config/firebase';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import { getLocationFromRegion, REGION_COORDINATES } from '../utils/regions';
 import { POINTS, TIME, USER, TEXT } from '../constants';
+import { pointsService } from '../services/PointsService';
 
 interface ChatContextType {
   currentUser: User;
@@ -28,7 +29,6 @@ interface ChatContextType {
   createPost: (content: string, images?: string[]) => Promise<{ pointsRewarded: boolean }>;
   startChatFromPost: (postId: string) => Promise<string | null>;
   deductPoints: (amount: number) => Promise<boolean>;
-  addPoints: (amount: number) => Promise<void>;
   updateProfile: (name: string, gender?: Gender, avatar?: string, age?: number, bdsmPreference?: BDSMPreference[], bio?: string, profileImages?: string[]) => void;
   updateRegion: (region: Region) => void;
   getDistance: (user1: User, user2: User) => number | null;
@@ -1109,52 +1109,50 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     const firebaseUser = auth.currentUser;
     if (!firebaseUser) return false;
 
-    const currentPoints = points;
-    if (currentPoints < amount) {
+    const previousPoints = points;
+    if (previousPoints < amount) {
       return false;
     }
 
-    const newPoints = currentPoints - amount;
-    setPoints(newPoints);
+    // 낙관적 업데이트 (실제 잔액은 트랜잭션 + 구독으로 동기화)
+    setPoints(previousPoints - amount);
 
-    // Firestore에도 포인트 업데이트
+    // Firestore 트랜잭션으로 차감 (덮어쓰기/경쟁 방지)
     try {
-      await firebaseFirestoreService.createOrUpdateUser({
-        id: firebaseUser.uid,
-        phoneNumber: '', // 업데이트만 하므로 불필요
-        name: currentUser.name,
-        points: newPoints,
-      });
+      const success = await firebaseFirestoreService.spendPoints(firebaseUser.uid, amount);
+      if (!success) {
+        // 잔액 부족 등으로 실패 → 롤백
+        setPoints(previousPoints);
+        return false;
+      }
       return true;
     } catch (error) {
       console.error('포인트 차감 실패:', error);
-      // 롤백
-      setPoints(currentPoints);
+      setPoints(previousPoints);
       return false;
     }
-  }, [points, currentUser.name]);
+  }, [points]);
 
-  const addPoints = useCallback(async (amount: number): Promise<void> => {
+  // 포인트 보상 적립 (서버 권위)
+  // 보안: 포인트 증가는 클라이언트가 직접 쓰지 않고 백엔드에서만 적립한다.
+  // 잔액은 Firestore 실시간 구독을 통해 자동 반영된다.
+  const claimReward = useCallback(async (type: 'attendance' | 'post-reward' | 'signup-bonus' | 'reviewer-demo'): Promise<{ granted: boolean; creditedPoints: number }> => {
     const firebaseUser = auth.currentUser;
-    if (!firebaseUser) return;
+    if (!firebaseUser) return { granted: false, creditedPoints: 0 };
 
-    const newPoints = points + amount;
-    setPoints(newPoints);
-
-    // Firestore에도 포인트 업데이트
     try {
-      await firebaseFirestoreService.createOrUpdateUser({
-        id: firebaseUser.uid,
-        phoneNumber: '', // 업데이트만 하므로 불필요
-        name: currentUser.name,
-        points: newPoints,
-      });
+      const result = await pointsService.claimReward(type);
+      // 적립 성공 시 잔액은 onSnapshot 구독으로 갱신되지만,
+      // 즉각적인 UX를 위해 newBalance가 있으면 선반영한다.
+      if (result.success && result.granted && typeof result.newBalance === 'number') {
+        setPoints(result.newBalance);
+      }
+      return { granted: result.granted, creditedPoints: result.creditedPoints };
     } catch (error) {
-      console.error('포인트 추가 실패:', error);
-      // 롤백
-      setPoints(points);
+      console.error('포인트 적립 실패:', error);
+      return { granted: false, creditedPoints: 0 };
     }
-  }, [points, currentUser.name]);
+  }, []);
 
   const createPost = useCallback(async (content: string, images?: string[]): Promise<{ pointsRewarded: boolean }> => {
     // 콘텐츠 필터링
@@ -1236,42 +1234,19 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       const today = kstTime.toISOString().split('T')[0]; // YYYY-MM-DD 형식
       const lastPostRewardDate = currentUser.lastPostRewardDate;
       let pointsRewarded = false;
-      
-      console.log('📅 포인트 지급 확인:', {
-        today,
-        lastPostRewardDate,
-        willReward: lastPostRewardDate !== today,
-        currentUserLastPostRewardDate: currentUser.lastPostRewardDate,
-        kstHour: kstTime.getHours(),
-        kstMinute: kstTime.getMinutes(),
-      });
-      
+
       // 자정(00:00) 이후 날짜가 바뀌면 포인트 지급 가능
+      // 포인트 적립 및 중복 방지는 서버에서 처리한다(권위).
       if (lastPostRewardDate !== today) {
-        // 오늘 첫 게시글이면 포인트 지급
-        console.log('✅ 포인트 지급: 오늘 첫 게시글 (자정 이후)');
-        await addPoints(POINTS.ATTENDANCE_REWARD);
-        pointsRewarded = true;
-        
-        // 마지막 포인트 지급 날짜 업데이트
-        try {
-          await firebaseFirestoreService.updateUserField(
-            firebaseUser.uid,
-            'lastPostRewardDate',
-            today
-          );
-          
-          // 로컬 상태도 업데이트
+        const { granted } = await claimReward('post-reward');
+        if (granted) {
+          pointsRewarded = true;
+          // 로컬 상태 선반영 (서버가 lastPostRewardDate도 갱신, 구독으로 동기화됨)
           setCurrentUser((prev) => ({
             ...prev,
             lastPostRewardDate: today,
           }));
-          console.log('✅ 마지막 포인트 지급 날짜 업데이트 완료:', today);
-        } catch (error) {
-          console.error('❌ 마지막 포인트 지급 날짜 업데이트 실패:', error);
         }
-      } else {
-        console.log('⏭️ 포인트 지급 스킵: 오늘 이미 게시글 포인트를 받았습니다.');
       }
       
       // Analytics: 게시글 작성
@@ -1317,7 +1292,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       
       throw new Error(errorMessage);
     }
-  }, [currentUser, ensureContact, addPoints]);
+  }, [currentUser, ensureContact, claimReward]);
 
   const startChatFromPost = useCallback(async (postId: string): Promise<string | null> => {
     const post = posts.find((p) => p.id === postId);
@@ -1853,31 +1828,27 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       // 한국 시간 기준으로 오늘 날짜 가져오기
       const today = getKoreaDateString();
 
-      // 포인트 추가 (50포인트)
-      await addPoints(50);
+      // 포인트 적립 및 중복(하루 1회) 방지는 서버에서 처리(권위)
+      const { granted, creditedPoints } = await claimReward('attendance');
+      if (!granted) {
+        Alert.alert('알림', '오늘은 이미 출석체크를 완료했습니다.\n내일 다시 시도해주세요.');
+        return false;
+      }
 
-      // 마지막 출석체크 날짜 업데이트
-      await firebaseFirestoreService.createOrUpdateUser({
-        id: firebaseUser.uid,
-        phoneNumber: '', // 업데이트만 하므로 불필요
-        name: currentUser.name,
-        lastAttendanceDate: today,
-      });
-
-      // 로컬 상태 업데이트
+      // 로컬 상태 선반영 (서버가 lastAttendanceDate도 갱신, 구독으로 동기화됨)
       setCurrentUser((prev) => ({
         ...prev,
         lastAttendanceDate: today,
       }));
 
-      Alert.alert('출석체크 완료', '50포인트가 지급되었습니다!');
+      Alert.alert('출석체크 완료', `${creditedPoints || 50}포인트가 지급되었습니다!`);
       return true;
     } catch (error: any) {
       console.error('출석체크 실패:', error);
       Alert.alert('오류', error.message || '출석체크에 실패했습니다.');
       return false;
     }
-  }, [currentUser.name, addPoints, canCheckAttendance, getKoreaDateString]);
+  }, [claimReward, canCheckAttendance, getKoreaDateString]);
 
   // 현재 채팅방 ID 설정 함수
   const setCurrentChatRoomId = useCallback((chatRoomId: string | null) => {
@@ -2057,7 +2028,6 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       createPost,
       startChatFromPost,
       deductPoints,
-      addPoints,
       updateProfile,
       updateRegion,
       getDistance,
@@ -2083,7 +2053,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       notificationSettings,
       updateNotificationSettings,
     }),
-    [currentUser, contacts, chatRooms, messages, points, posts, blockedUsers, reports, notificationSettings, createOrOpenChat, sendMessage, getMessages, getChatPartner, markAsRead, setCurrentChatRoomId, createPost, startChatFromPost, deductPoints, addPoints, updateProfile, updateRegion, getDistance, formatDistance, blockUser, unblockUser, isBlocked, reportPost, reportUser, deletePost, deleteUser, updateReportStatus, requestAccountDeletion, cancelAccountDeletion, checkAttendance, canCheckAttendance, likeUser, unlikeUser, isLiked, pinChatRoom, unpinChatRoom, isPinned, updateNotificationSettings]
+    [currentUser, contacts, chatRooms, messages, points, posts, blockedUsers, reports, notificationSettings, createOrOpenChat, sendMessage, getMessages, getChatPartner, markAsRead, setCurrentChatRoomId, createPost, startChatFromPost, deductPoints, updateProfile, updateRegion, getDistance, formatDistance, blockUser, unblockUser, isBlocked, reportPost, reportUser, deletePost, deleteUser, updateReportStatus, requestAccountDeletion, cancelAccountDeletion, checkAttendance, canCheckAttendance, likeUser, unlikeUser, isLiked, pinChatRoom, unpinChatRoom, isPinned, updateNotificationSettings]
   );
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;

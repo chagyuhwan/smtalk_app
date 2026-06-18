@@ -23,6 +23,7 @@ import { authProvider } from '../services/AuthProviderFactory';
 import { AUTH_PROVIDER_TYPE } from '../constants/auth';
 import { firebaseFirestoreService } from '../services/FirebaseFirestoreService';
 import { firebaseStorageService } from '../services/FirebaseStorageService';
+import { pointsService } from '../services/PointsService';
 import { auth } from '../config/firebase';
 import { signInAnonymously } from 'firebase/auth';
 import { BDSMPreference, Region } from '../types';
@@ -57,17 +58,41 @@ export default function PhoneAuthScreen({ navigation }: Props) {
   // NICE 인증 완료 후 돌아온 경우 처리
   useEffect(() => {
     const params = route.params;
-    if (params?.verified && params?.userId) {
-      console.log('[PhoneAuth] NICE 인증 완료, 회원가입 화면으로 이동');
-      setUserId(params.userId);
+    if (!params?.verified || !params?.userId) {
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      setUserId(params.userId!);
       if (params.phoneNumber) {
         setPhoneNumber(params.phoneNumber);
       }
+
+      // 기존 가입자(안정 UID 기준)인지 확인 → 가입자면 회원가입 단계 생략 후 바로 메인 진입
+      try {
+        const existingUser = await firebaseFirestoreService.getUser(params.userId!);
+        if (cancelled) return;
+        if (existingUser && existingUser.name) {
+          console.log('[PhoneAuth] 기존 가입자 확인 - 메인 화면으로 이동');
+          navigation.replace('MainTabs');
+          return;
+        }
+      } catch (error) {
+        console.log('[PhoneAuth] 기존 사용자 조회 실패, 신규 가입 진행:', error);
+      }
+
+      if (cancelled) return;
+      console.log('[PhoneAuth] 신규 사용자 - 회원가입 화면으로 이동');
       setStep('signup');
       setTimeout(() => {
         nameInputRef.current?.focus();
       }, 100);
-    }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [route.params]);
   
   const [step, setStep] = useState<AuthStep>('phone');
@@ -202,49 +227,8 @@ export default function PhoneAuthScreen({ navigation }: Props) {
           // 익명 로그인 실패해도 진행 - Firebase Console에서 Anonymous Auth 활성화 필요
         }
 
-        // Firestore에 다른 데모 유저 2명 생성 (홈·사용자 탭 콘텐츠 채우기)
-        const demoUsers = [
-          {
-            id: 'demo_user_alice',
-            phoneNumber: '01012340001',
-            name: '앨리스',
-            gender: 'female' as const,
-            age: 27,
-            latitude: 37.5172,
-            longitude: 127.0473,
-            region: 'seoul' as Region,
-            isAdmin: false,
-            points: 500,
-            bio: '독서와 카페투어를 좋아하는 서울 거주자입니다.',
-            bdsmPreference: ['submissive' as BDSMPreference],
-          },
-          {
-            id: 'demo_user_bob',
-            phoneNumber: '01012340002',
-            name: '밥',
-            gender: 'male' as const,
-            age: 31,
-            latitude: 37.4979,
-            longitude: 127.0276,
-            region: 'seoul' as Region,
-            isAdmin: false,
-            points: 300,
-            bio: '운동과 요리를 즐기는 강남 거주자입니다.',
-            bdsmPreference: ['dominant' as BDSMPreference],
-          },
-        ];
-        for (const u of demoUsers) {
-          try { await firebaseFirestoreService.createOrUpdateUser(u); } catch { /* 무시 */ }
-        }
-
-        // 데모 유저들의 게시글 생성 (authorId가 달라 충돌 없음)
-        const demoPosts = [
-          { id: 'demo_post_alice', authorId: 'demo_user_alice', authorName: '앨리스', content: '안녕하세요! 서울에서 새로운 인연을 찾고 있어요. 독서 좋아하시는 분 연락 주세요 📚' },
-          { id: 'demo_post_bob', authorId: 'demo_user_bob', authorName: '밥', content: '강남 근처 사시는 분들 같이 운동 하실래요? 가볍게 러닝부터 시작해봐요 🏃' },
-        ];
-        for (const p of demoPosts) {
-          try { await firebaseFirestoreService.createPost(p); } catch { /* 무시 */ }
-        }
+        // 주의: 공유 컬렉션(users/posts)에 데모 데이터를 심지 않습니다.
+        // (실제 운영 DB 오염 방지 — 심사관은 자신의 데모 계정으로만 앱을 둘러봅니다)
 
         setUserId(reviewerUid);
         setPhoneNumber(REVIEWER_TEST_PHONE);
@@ -476,10 +460,12 @@ export default function PhoneAuthScreen({ navigation }: Props) {
             longitude: location.longitude,
             region: region || ('seoul' as Region),
             isAdmin: false,
-            points: 10000,
+            points: 0, // 포인트는 서버에서 지급 (클라이언트 임의 지급 금지)
             bio: bio.trim() || '앱 심사를 위한 데모 계정입니다.',
             bdsmPreference: bdsmPreference.length > 0 ? bdsmPreference : ['vanilla' as BDSMPreference],
           });
+          // 심사용 데모 포인트는 서버에서 지급 (익명 계정 전용, 1회)
+          await pointsService.claimReward('reviewer-demo');
         } catch (e) {
           // 저장 실패해도 메인 화면으로 이동
         }
@@ -542,13 +528,23 @@ export default function PhoneAuthScreen({ navigation }: Props) {
         bio: bio.trim(),
       };
       
-      // 신규 사용자인 경우에만 포인트 설정 (기존 사용자는 포인트 유지)
+      // 신규 사용자는 포인트를 0으로 생성하고, 가입 보너스는 서버에서 지급
+      // (클라이언트가 포인트를 임의로 지급/증가시키지 못하도록 보안 규칙으로 차단됨)
       if (!existingUser) {
-        userData.points = 100; // 가입 시 기본 포인트
+        userData.points = 0;
       }
       // 기존 사용자인 경우 points를 전달하지 않아서 기존 포인트가 유지됨
-      
+
       await firebaseFirestoreService.createOrUpdateUser(userData);
+
+      // 신규 사용자에게 가입 보너스 지급 (서버 권위, 1회 한정)
+      if (!existingUser) {
+        try {
+          await pointsService.claimReward('signup-bonus');
+        } catch (error) {
+          console.error('가입 보너스 지급 실패:', error);
+        }
+      }
 
       // 약관 동의 내역 저장
       try {

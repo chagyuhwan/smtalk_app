@@ -37,7 +37,7 @@ const CHARGE_OPTIONS: ChargeOption[] = [
 
 export default function ChargeScreen() {
   const navigation = useNavigation<NavigationProp>();
-  const { points, addPoints } = useChat();
+  const { points } = useChat();
   
   // 성능 측정: 화면 포커스 시
   useFocusEffect(
@@ -90,18 +90,15 @@ export default function ChargeScreen() {
     initPayment();
 
     // 구매 성공 콜백 설정
-    paymentService.onPurchaseSuccess = async (purchasedPoints, purchase) => {
-      console.log('구매 성공:', purchasedPoints, purchase);
-      
-      // 선택된 옵션에서 포인트 계산
+    // 포인트 적립은 서버에서 처리되며, 잔액은 Firestore 실시간 구독으로 자동 반영됨
+    paymentService.onPurchaseSuccess = async (creditedPoints) => {
       const currentOption = selectedOptionRef.current;
-      const pointsToAdd = currentOption?.baseCoins || purchasedPoints;
-      await addPoints(pointsToAdd);
+      const displayPoints = creditedPoints || currentOption?.baseCoins || 0;
       setIsLoading(false);
-      
+
       Alert.alert(
         '충전 완료',
-        `${pointsToAdd.toLocaleString()}포인트가 충전되었습니다.`,
+        `${displayPoints.toLocaleString()}포인트가 충전되었습니다.`,
         [
           {
             text: '확인',
@@ -118,7 +115,7 @@ export default function ChargeScreen() {
     return () => {
       paymentService.cleanup();
     };
-  }, [navigation, addPoints]);
+  }, [navigation]);
 
   const handleCharge = async () => {
     if (!selectedOption) {
