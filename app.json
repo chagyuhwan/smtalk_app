@@ -42,7 +42,6 @@
       ],
       "react-native-iap",
       "@react-native-firebase/app",
-      "@react-native-firebase/auth",
       "./plugins/withFirebaseFix"
     ],
     "ios": {
@@ -87,7 +86,7 @@
       },
       "bundleIdentifier": "com.kanc.randomchat",
       "googleServicesFile": "./GoogleService-Info.plist",
-      "buildNumber": "7"
+      "buildNumber": "9"
     },
     "android": {
       "adaptiveIcon": {

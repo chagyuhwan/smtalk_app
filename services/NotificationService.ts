@@ -396,8 +396,14 @@ class NotificationService {
             fullToken: token, // 디버깅용 전체 토큰 출력
             platform: Platform.OS,
           });
-        } catch (error) {
-          console.error('[푸시 토큰] 저장 실패:', error);
+        } catch (error: any) {
+          if (error?.code === 'permission-denied') {
+            console.warn(
+              '[푸시 토큰] 저장 실패 (권한 없음) - Firestore user 문서가 아직 없을 수 있습니다. 회원가입 완료 후 재시도됩니다.'
+            );
+          } else {
+            console.error('[푸시 토큰] 저장 실패:', error);
+          }
         }
       } else {
         console.warn('[푸시 토큰] 저장 실패 - 사용자 또는 토큰 없음:', {

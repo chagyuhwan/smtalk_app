@@ -1,5 +1,6 @@
 import { Platform, Alert } from 'react-native';
 import { auth } from '../config/firebase';
+import { analyticsService } from './AnalyticsService';
 
 // Expo Go에서는 react-native-iap를 사용할 수 없으므로 조건부 import
 let RNIap: any = null;
@@ -172,7 +173,6 @@ class PaymentService {
 
           // Analytics: 포인트 충전 (실패해도 무시)
           try {
-            const { analyticsService } = await import('./AnalyticsService');
             const credited = result.creditedPoints || 0;
             analyticsService.logPurchase(credited, credited * 10, 'KRW');
           } catch (error) {

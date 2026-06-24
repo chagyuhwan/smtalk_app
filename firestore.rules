@@ -1,6 +1,24 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    function onlyChanged(fields) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(fields);
+    }
+
+    function pointsNotIncreased() {
+      return !('points' in resource.data)
+        ? (!('points' in request.resource.data) || request.resource.data.points == 0)
+        : request.resource.data.points <= resource.data.points;
+    }
+
+    function isAdminUnchanged() {
+      return request.resource.data.get('isAdmin', false) == resource.data.get('isAdmin', false);
+    }
     
     // ==================== 사용자 (users) ====================
     match /users/{userId} {
@@ -14,13 +32,24 @@ service cloud.firestore {
         && request.resource.data.points == 0
         && request.resource.data.isAdmin == false;
 
+      // 푸시 토큰 저장/제거 (expoPushToken만 변경)
+      allow update: if isOwner(userId)
+        && onlyChanged(['expoPushToken', 'updatedAt']);
+
+      // 알림 설정 저장
+      allow update: if isOwner(userId)
+        && onlyChanged(['notificationSettings', 'updatedAt']);
+
+      // 약관 동의 내역 저장
+      allow update: if isOwner(userId)
+        && onlyChanged(['termsAgreed', 'privacyAgreed', 'termsAgreedAt', 'privacyAgreedAt', 'updatedAt']);
+
       // 본인 문서 수정: 포인트 "증가" 금지 (증가는 서버 Admin SDK만 가능)
       // 동일하거나 감소(차감)만 허용 → 클라이언트의 포인트 자가변조/결제 우회 차단
       // isAdmin 변경 금지 → 자가 관리자 권한상승 차단
-      allow update: if request.auth != null
-        && request.auth.uid == userId
-        && request.resource.data.points <= resource.data.points
-        && request.resource.data.isAdmin == resource.data.isAdmin;
+      allow update: if isOwner(userId)
+        && pointsNotIncreased()
+        && isAdminUnchanged();
 
       // 본인 문서 삭제
       allow delete: if request.auth != null && request.auth.uid == userId;

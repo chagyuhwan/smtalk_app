@@ -2198,6 +2198,16 @@ class FirebaseFirestoreService {
   async updatePushToken(userId: string, pushToken: string | null): Promise<void> {
     try {
       const userRef = doc(db, this.COLLECTIONS.USERS, userId);
+      const userSnap = await getDoc(userRef);
+
+      if (!userSnap.exists()) {
+        console.warn(
+          '[푸시 토큰] 사용자 문서가 없어 저장을 건너뜁니다. 회원가입 완료 후 다시 시도됩니다:',
+          userId
+        );
+        return;
+      }
+
       const updateData: any = {
         updatedAt: Timestamp.now(),
       };
@@ -2205,7 +2215,6 @@ class FirebaseFirestoreService {
       if (pushToken) {
         updateData.expoPushToken = pushToken;
       } else {
-        // null인 경우 필드 삭제
         updateData.expoPushToken = null;
       }
 

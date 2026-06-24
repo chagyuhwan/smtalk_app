@@ -24,6 +24,7 @@ import { AUTH_PROVIDER_TYPE } from '../constants/auth';
 import { firebaseFirestoreService } from '../services/FirebaseFirestoreService';
 import { firebaseStorageService } from '../services/FirebaseStorageService';
 import { pointsService } from '../services/PointsService';
+import { analyticsService } from '../services/AnalyticsService';
 import { auth } from '../config/firebase';
 import { signInAnonymously } from 'firebase/auth';
 import { BDSMPreference, Region } from '../types';
@@ -559,8 +560,7 @@ export default function PhoneAuthScreen({ navigation }: Props) {
         // 약관 동의 저장 실패해도 회원가입은 진행
       }
 
-      // Analytics: 회원가입 완료
-      const { analyticsService } = await import('../services/AnalyticsService');
+      // Analytics: 회원가입 완료 (네이티브에서는 no-op)
       analyticsService.logSignUp('phone');
       analyticsService.setUserId(finalUserId);
 

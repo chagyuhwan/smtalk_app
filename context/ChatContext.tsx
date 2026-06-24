@@ -10,6 +10,8 @@ import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import { getLocationFromRegion, REGION_COORDINATES } from '../utils/regions';
 import { POINTS, TIME, USER, TEXT } from '../constants';
 import { pointsService } from '../services/PointsService';
+import { analyticsService } from '../services/AnalyticsService';
+import { errorReportingService } from '../services/ErrorReportingService';
 
 interface ChatContextType {
   currentUser: User;
@@ -100,6 +102,8 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
   const lastMessageTimestampsRef = useRef<Record<string, number>>({});
   // 메시지 구독 해제 함수들을 저장할 Map
   const messageUnsubscribesRef = useRef<Map<string, () => void>>(new Map());
+  // Firestore user 문서 확인 후 푸시 토큰 1회 등록
+  const pushTokenRegisteredForUidRef = useRef<string | null>(null);
 
   // 앱 시작 시 기본 지역(서울) 설정 및 알림 권한 요청
   useEffect(() => {
@@ -115,13 +119,9 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       location: DEFAULT_LOCATION,
     }));
     
-    // 알림 권한 요청 및 푸시 토큰 등록
+    // 알림 권한만 요청 (푸시 토큰 저장은 Firestore user 문서 생성 후)
     (async () => {
       await notificationService.requestPermissions();
-      // 로그인 상태일 때만 푸시 토큰 등록
-      if (auth.currentUser) {
-        await notificationService.registerForPushNotifications();
-      }
     })();
   }, []); // 최초 한 번만 실행
   
@@ -262,29 +262,10 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
           console.error('푸시 토큰 제거 실패:', error);
         });
         // Error Reporting: 사용자 ID 제거
-        import('../services/ErrorReportingService').then(({ errorReportingService }) => {
-          errorReportingService.setUserId(null);
-        }).catch((error) => {
-          console.error('Error Reporting 사용자 ID 제거 실패:', error);
-        });
+        errorReportingService.setUserId(null);
+        pushTokenRegisteredForUidRef.current = null;
         return;
       }
-
-      // 로그인 시 푸시 토큰 등록 (약간의 지연 후 실행하여 네이티브 모듈이 준비될 시간 제공)
-      setTimeout(() => {
-        console.log('[로그인] 푸시 토큰 등록 시작');
-        notificationService.registerForPushNotifications()
-          .then((token) => {
-            if (token) {
-              console.log('[로그인] 푸시 토큰 등록 성공:', token.substring(0, 30) + '...');
-            } else {
-              console.warn('[로그인] 푸시 토큰 등록 실패 - 토큰 없음');
-            }
-          })
-          .catch((error) => {
-            console.error('[로그인] 푸시 토큰 등록 실패:', error);
-          });
-      }, 1000); // 1초 후 실행
 
       // Firestore에서 사용자 정보 실시간 구독
       console.log('=== 현재 사용자 실시간 구독 시작 ===');
@@ -295,7 +276,6 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
         async (userData, userPoints, blockedUsersData) => {
             if (userData) {
             // Analytics: 로그인 및 사용자 설정
-            const { analyticsService } = await import('../services/AnalyticsService');
             analyticsService.setUserId(firebaseUser.uid);
             analyticsService.setUserProperty('gender', userData.gender || null);
             analyticsService.setUserProperty('region', userData.region || null);
@@ -305,8 +285,22 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
             }
             
             // Error Reporting: 사용자 ID 설정
-            const { errorReportingService } = await import('../services/ErrorReportingService');
             errorReportingService.setUserId(firebaseUser.uid);
+
+            // Firestore user 문서 생성 완료 후 푸시 토큰 등록 (회원가입 전 permission 오류 방지)
+            if (pushTokenRegisteredForUidRef.current !== firebaseUser.uid) {
+              pushTokenRegisteredForUidRef.current = firebaseUser.uid;
+              notificationService.registerForPushNotifications()
+                .then((token) => {
+                  if (token) {
+                    console.log('[푸시 토큰] 프로필 확인 후 등록 성공:', token.substring(0, 30) + '...');
+                  }
+                })
+                .catch((error) => {
+                  pushTokenRegisteredForUidRef.current = null;
+                  console.error('[푸시 토큰] 프로필 확인 후 등록 실패:', error);
+                });
+            }
             
             // Firestore에서 가져온 사용자 정보로 업데이트
             console.log('사용자 정보 실시간 업데이트:', userData.name);
@@ -802,7 +796,6 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       setMessages((prev) => ({ ...prev, [newRoom.id]: [] }));
 
       // Analytics: 채팅 시작
-      const { analyticsService } = await import('../services/AnalyticsService');
       analyticsService.logChatStarted(user.id);
 
       return roomId;
@@ -923,7 +916,6 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       } catch (error: any) {
         console.error('채팅방 확인/생성 실패:', error);
         // 에러 리포팅
-        const { errorReportingService } = await import('../services/ErrorReportingService');
         errorReportingService.logError(error, { 
           context: 'sendMessage - chatRoom creation',
           chatRoomId,
@@ -948,7 +940,6 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     try {
       // Firestore에 메시지 저장 (DB에 영구 저장)
       // Analytics: 메시지 전송
-      const { analyticsService } = await import('../services/AnalyticsService');
       analyticsService.logMessageSent(chatRoomId);
 
       const messageId = await firebaseFirestoreService.sendMessage({
@@ -1010,7 +1001,6 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       // 에러 리포팅
       const firebaseUser = auth.currentUser;
       if (firebaseUser) {
-        const { errorReportingService } = await import('../services/ErrorReportingService');
         errorReportingService.logError(error, { 
           context: 'sendMessage - final catch',
           chatRoomId,
@@ -1250,7 +1240,6 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       }
       
       // Analytics: 게시글 작성
-      const { analyticsService } = await import('../services/AnalyticsService');
       analyticsService.logPostCreated(imageUrls.length > 0);
       
       // 게시글 작성 시 작성자를 연락처에 추가 (위치 정보 포함)
@@ -1275,7 +1264,6 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       });
       
       // 에러 리포팅
-      const { errorReportingService } = await import('../services/ErrorReportingService');
       errorReportingService.logError(error, { 
         context: 'createPost',
         userId: firebaseUser.uid,
@@ -1662,7 +1650,6 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       console.log('게시글 신고 완료:', reportId);
       
       // Analytics: 게시글 신고
-      const { analyticsService } = await import('../services/AnalyticsService');
       analyticsService.logPostReported(postId, reason);
     } catch (error) {
       console.error('신고 전송 실패:', error);

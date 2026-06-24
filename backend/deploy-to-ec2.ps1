@@ -7,7 +7,7 @@
 #   4. SSH 최초 접속 후: bash setup-ec2.sh
 #
 # 사용 예:
-#   .\deploy-to-ec2.ps1 -ElasticIp "43.201.164.203" -KeyPath "C:\keys\smtalk.pem" -Email "you@email.com"
+#   .\deploy-to-ec2.ps1 -ElasticIp "3.39.84.235" -KeyPath "C:\keys\smtalk.pem" -Email "you@email.com"
 
 param(
     [Parameter(Mandatory = $true)]
